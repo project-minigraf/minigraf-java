@@ -10,7 +10,7 @@ plugins {
 }
 
 group = "io.github.project-minigraf"
-version = System.getenv("RELEASE_VERSION") ?: "1.0.0"
+version = System.getenv("RELEASE_VERSION") ?: "0.0.0-local"
 
 repositories {
     mavenCentral()
