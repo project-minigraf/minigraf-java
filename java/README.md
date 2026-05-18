@@ -1,6 +1,6 @@
 # minigraf-jvm
 
-[![Maven Central](https://img.shields.io/maven-central/v/io.github.adityamukho/minigraf-jvm.svg)](https://central.sonatype.com/artifact/io.github.adityamukho/minigraf-jvm)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.project-minigraf/minigraf-jvm.svg)](https://central.sonatype.com/artifact/io.github.project-minigraf/minigraf-jvm)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/project-minigraf/minigraf#license)
 
 > Embedded bi-temporal graph database for Java/Kotlin — Datalog queries, time travel, fat JAR with embedded natives
@@ -13,7 +13,7 @@ Minigraf for Java and Kotlin on the desktop JVM. Fat JAR with embedded native li
 
 ```kotlin
 dependencies {
-    implementation("io.github.adityamukho:minigraf-jvm:1.0.0")
+    implementation("io.github.project-minigraf:minigraf-jvm:1.1.1")
 }
 ```
 
@@ -21,16 +21,16 @@ dependencies {
 
 ```xml
 <dependency>
-    <groupId>io.github.adityamukho</groupId>
+    <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.1</version>
 </dependency>
 ```
 
 ## Quick start
 
 ```kotlin
-import io.github.adityamukho.minigraf.MiniGrafDb
+import uniffi.minigraf_ffi.MiniGrafDb
 import org.json.JSONObject
 
 // File-backed database

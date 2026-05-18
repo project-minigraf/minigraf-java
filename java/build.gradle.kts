@@ -142,11 +142,11 @@ publishing {
             pom {
                 name.set("Minigraf JVM")
                 description.set("Zero-config, single-file, embedded graph database with bi-temporal Datalog queries — JVM bindings")
-                url.set("https://github.com/project-minigraf/minigraf")
+                url.set("https://github.com/project-minigraf/minigraf-java")
                 licenses {
                     license {
                         name.set("MIT OR Apache-2.0")
-                        url.set("https://github.com/project-minigraf/minigraf/blob/main/LICENSE-MIT")
+                        url.set("https://github.com/project-minigraf/minigraf-java/blob/main/LICENSE-MIT")
                     }
                 }
                 developers {
@@ -156,9 +156,9 @@ publishing {
                     }
                 }
                 scm {
-                    connection.set("scm:git:git://github.com/project-minigraf/minigraf.git")
-                    developerConnection.set("scm:git:ssh://github.com/project-minigraf/minigraf.git")
-                    url.set("https://github.com/project-minigraf/minigraf")
+                    connection.set("scm:git:git://github.com/project-minigraf/minigraf-java.git")
+                    developerConnection.set("scm:git:ssh://github.com/project-minigraf/minigraf-java.git")
+                    url.set("https://github.com/project-minigraf/minigraf-java")
                 }
             }
         }
