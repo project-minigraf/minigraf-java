@@ -64,6 +64,9 @@ val generateKotlinBindings by tasks.registering(Exec::class) {
     workingDir = File(repoRoot)
     inputs.file(libPath)
     outputs.dir(generatedSourcesDir)
+    // Start from an empty dir so classes from an earlier package layout
+    // (e.g. before uniffi.toml set package_name) cannot linger and clash.
+    doFirst { delete(generatedSourcesDir) }
     commandLine(
         "$repoRoot/target/release/uniffi-bindgen",
         "generate", "--library", libPath,
@@ -76,16 +79,25 @@ val generateKotlinBindings by tasks.registering(Exec::class) {
     // findLibraryName() is called from every Native.register() invocation, so this
     // fires regardless of which object (UniffiLib / IntegrityCheckingUniffiLib) is
     // initialised first.  NativeLoader.load() is idempotent.
+    // Fail the build if the marker is missing (e.g. after a UniFFI upgrade), since
+    // a jar without the patch cannot find its native library at runtime.
     doLast {
+        val marker = "private fun findLibraryName(componentName: String): String {"
+        var patchedAny = false
         generatedSourcesDir.get().asFile
             .walkTopDown().filter { it.extension == "kt" }.forEach { file ->
-                val patched = file.readText()
-                    .replace(
-                        "private fun findLibraryName(componentName: String): String {",
-                        "private fun findLibraryName(componentName: String): String {\n    io.github.project_minigraf.minigraf.NativeLoader.load()"
-                    )
-                file.writeText(patched)
+                val text = file.readText()
+                if (marker in text) {
+                    patchedAny = true
+                    file.writeText(text.replace(
+                        marker,
+                        "$marker\n    io.github.project_minigraf.minigraf.NativeLoader.load()"
+                    ))
+                }
             }
+        check(patchedAny) {
+            "findLibraryName() not found in generated bindings; NativeLoader patch not applied"
+        }
     }
 }
 
@@ -110,14 +122,19 @@ tasks.withType<org.gradle.api.tasks.bundling.AbstractArchiveTask>().configureEac
 val copyLocalNative by tasks.registering(Copy::class) {
     group = "codegen"
     description = "Copy local platform native into resources (dev only)"
+    // Mirrors NativeLoader.resolve() so the loader finds the local native.
     val os = System.getProperty("os.name").lowercase()
-    val arch = System.getProperty("os.arch").lowercase()
+    val arch = when (System.getProperty("os.arch").lowercase()) {
+        "amd64", "x86_64", "x86-64" -> "x86_64"
+        "aarch64", "arm64" -> "aarch64"
+        else -> throw GradleException("Unsupported architecture: ${System.getProperty("os.arch")}")
+    }
+    val musl = File("/lib").listFiles { f -> f.name.startsWith("ld-musl-") }?.isNotEmpty() == true
     val (osKey, nativeName) = when {
-        "linux" in os && ("aarch64" in arch || "arm64" in arch) ->
-            "linux/aarch64" to "libminigraf_ffi.so"
-        "linux" in os -> "linux/x86_64" to "libminigraf_ffi.so"
-        "mac" in os -> "macos/universal" to "libminigraf_ffi.dylib"
-        "windows" in os -> "windows/x86_64" to "minigraf_ffi.dll"
+        os.startsWith("linux") && musl -> "linux-musl/$arch" to "libminigraf_ffi.so"
+        os.startsWith("linux") -> "linux/$arch" to "libminigraf_ffi.so"
+        os.startsWith("mac") -> "macos/universal" to "libminigraf_ffi.dylib"
+        os.startsWith("windows") -> "windows/$arch" to "minigraf_ffi.dll"
         else -> throw GradleException("Unsupported platform: $os $arch")
     }
     from(File("$repoRoot/target/release/$nativeName"))
@@ -129,6 +146,16 @@ val copyLocalNative by tasks.registering(Copy::class) {
 java {
     withSourcesJar()
     withJavadocJar()
+}
+
+tasks.jar {
+    manifest {
+        attributes(
+            "Automatic-Module-Name" to "io.github.project_minigraf.minigraf",
+            "Implementation-Title" to "minigraf-jvm",
+            "Implementation-Version" to project.version.toString(),
+        )
+    }
 }
 
 publishing {
@@ -144,9 +171,14 @@ publishing {
                 description.set("Zero-config, single-file, embedded graph database with bi-temporal Datalog queries — JVM bindings")
                 url.set("https://github.com/project-minigraf/minigraf-java")
                 licenses {
+                    // Dual-licensed: one entry per license so scanners read both.
                     license {
-                        name.set("MIT OR Apache-2.0")
+                        name.set("MIT License")
                         url.set("https://github.com/project-minigraf/minigraf-java/blob/main/LICENSE-MIT")
+                    }
+                    license {
+                        name.set("Apache License, Version 2.0")
+                        url.set("https://github.com/project-minigraf/minigraf-java/blob/main/LICENSE-APACHE")
                     }
                 }
                 developers {

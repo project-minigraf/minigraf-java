@@ -5,7 +5,18 @@
 
 > Embedded bi-temporal graph database for Java/Kotlin — Datalog queries, time travel, fat JAR with embedded natives
 
-Minigraf for Java and Kotlin on the desktop JVM. Fat JAR with embedded native libraries for Linux x86_64/aarch64, macOS universal2, and Windows x86_64. No Rust toolchain required.
+Minigraf for Java and Kotlin on the desktop JVM. Fat JAR with embedded native libraries. No Rust toolchain required.
+
+## Supported platforms
+
+| OS | Architectures | Notes |
+|---|---|---|
+| Linux (glibc) | x86_64, aarch64 | glibc 2.17 or newer (RHEL/CentOS 7+, Debian 8+, Ubuntu 14.04+) |
+| Linux (musl) | x86_64, aarch64 | Alpine |
+| macOS | x86_64, aarch64 | universal2 binary |
+| Windows | x86_64, aarch64 | |
+
+On any other platform, the first call fails with an `UnsupportedOperationException` naming the detected OS and architecture.
 
 ## Install
 
@@ -13,7 +24,7 @@ Minigraf for Java and Kotlin on the desktop JVM. Fat JAR with embedded native li
 
 ```kotlin
 dependencies {
-    implementation("io.github.project-minigraf:minigraf-jvm:1.1.1")
+    implementation("io.github.project-minigraf:minigraf-jvm:2.0.2")
 }
 ```
 
@@ -23,14 +34,14 @@ dependencies {
 <dependency>
     <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>1.1.1</version>
+    <version>2.0.2</version>
 </dependency>
 ```
 
 ## Quick start
 
 ```kotlin
-import uniffi.minigraf_ffi.MiniGrafDb
+import io.github.project_minigraf.minigraf.MiniGrafDb
 import org.json.JSONObject
 
 // File-backed database
@@ -54,6 +65,21 @@ val snap = db.execute("(query [:find ?age :as-of 1 :where [:alice :person/age ?a
 // Flush dirty pages to disk
 db.checkpoint()
 ```
+
+### Java
+
+Use the `Minigraf` facade for static factory methods. Without it, Java has to go through the Kotlin companion object (`MiniGrafDb.Companion.open(path)`).
+
+```java
+import io.github.project_minigraf.minigraf.Minigraf;
+import io.github.project_minigraf.minigraf.MiniGrafDb;
+
+MiniGrafDb db = Minigraf.open("/path/to/myapp.graph");
+String result = db.execute("(transact [[:alice :person/name \"Alice\"]])");
+db.checkpoint();
+```
+
+The bindings are generated Kotlin, so `kotlin-stdlib` is a transitive runtime dependency and ends up on Java classpaths too. JPMS users can require the automatic module `io.github.project_minigraf.minigraf`.
 
 ## Links
 

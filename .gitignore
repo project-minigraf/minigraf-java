@@ -1,1 +1,5 @@
 /target
+
+# Local temporal-reasoning plugin store
+/memory.graph
+/memory.graph.*

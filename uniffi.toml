@@ -1,0 +1,4 @@
+# Generate the Kotlin bindings under the Maven group's package instead of
+# UniFFI's default `uniffi.minigraf_ffi`.
+[bindings.kotlin]
+package_name = "io.github.project_minigraf.minigraf"
