@@ -48,6 +48,42 @@ jobs:
         working-directory: java
         run: ./gradlew test
 
+  # Runs the Java tests on musl libc, so NativeLoader's musl detection and the
+  # linux-musl native are exercised at runtime rather than only built.
+  java-test-alpine:
+    name: Java tests (Alpine / musl)
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:17-jdk-alpine
+    env:
+      # musl defaults to crt-static, under which rustc drops the cdylib output.
+      RUSTFLAGS: -C target-feature=-crt-static
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache bash curl gcc git musl-dev
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build Rust library (release)
+        run: cargo build --release
+
+      - name: Generate Kotlin bindings + copy local native
+        working-directory: java
+        run: |
+          ./gradlew generateKotlinBindings copyLocalNative
+          # Fails if musl detection sent the native to the glibc directory.
+          test -f src/main/resources/natives/linux-musl/x86_64/libminigraf_ffi.so
+
+      - name: Run tests
+        working-directory: java
+        run: ./gradlew test
+
   # Builds every native the fat JAR ships. release.yml calls this workflow, so
   # these artifacts are built from the tested commit before anything is tagged,
   # and the publish job downloads them from the same run.
