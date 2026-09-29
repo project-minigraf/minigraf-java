@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'v*.x']
   pull_request:
   workflow_call:
     inputs:
@@ -47,3 +47,115 @@ jobs:
       - name: Run tests
         working-directory: java
         run: ./gradlew test
+
+  # Builds every native the fat JAR ships. release.yml calls this workflow, so
+  # these artifacts are built from the tested commit before anything is tagged,
+  # and the publish job downloads them from the same run.
+  build-natives:
+    name: Build native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux targets use cargo-zigbuild to pin an old glibc floor (2.17)
+          # instead of the runner's, so RHEL 8, Debian 11 etc. can load them.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zig-target: x86_64-unknown-linux-gnu.2.17
+            native-dir: linux/x86_64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            zig-target: aarch64-unknown-linux-gnu.2.17
+            native-dir: linux/aarch64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            zig-target: x86_64-unknown-linux-musl
+            native-dir: linux-musl/x86_64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            zig-target: aarch64-unknown-linux-musl
+            native-dir: linux-musl/aarch64
+            lib-name: libminigraf_ffi.so
+          - os: macos-14
+            target: universal2
+            native-dir: macos/universal
+            lib-name: libminigraf_ffi.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            native-dir: windows/x86_64
+            lib-name: minigraf_ffi.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            native-dir: windows/aarch64
+            lib-name: minigraf_ffi.dll
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'universal2' && 'aarch64-apple-darwin x86_64-apple-darwin' || matrix.target }}
+
+      - uses: actions/setup-python@v5
+        if: matrix.zig-target
+        with:
+          python-version: '3.x'
+
+      - name: Install zig and cargo-zigbuild
+        if: matrix.zig-target
+        run: pip install ziglang cargo-zigbuild
+
+      - name: Build (universal2)
+        if: matrix.target == 'universal2'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p out
+          lipo -create \
+            target/aarch64-apple-darwin/release/libminigraf_ffi.dylib \
+            target/x86_64-apple-darwin/release/libminigraf_ffi.dylib \
+            -output out/libminigraf_ffi.dylib
+
+      - name: Build (Linux, zigbuild)
+        if: matrix.zig-target
+        # musl defaults to crt-static, under which rustc drops the cdylib output.
+        env:
+          RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
+        run: |
+          cargo zigbuild --release --lib --target ${{ matrix.zig-target }}
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build --release --lib --target ${{ matrix.target }}
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
+
+      - name: Show dynamic dependencies
+        if: runner.os == 'Linux'
+        run: readelf -d out/${{ matrix.lib-name }} | grep NEEDED
+
+      - name: Check glibc floor
+        if: endsWith(matrix.target, '-linux-gnu')
+        run: |
+          MAX=$(objdump -T out/${{ matrix.lib-name }} | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "Highest required glibc: $MAX"
+          if [ "$(printf '%s\n2.17\n' "$MAX" | sort -V | tail -1)" != "2.17" ]; then
+            echo "::error::${{ matrix.lib-name }} requires glibc $MAX, above the 2.17 floor"
+            exit 1
+          fi
+
+      - name: Upload native
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.target }}
+          path: out/${{ matrix.lib-name }}
+          if-no-files-found: error

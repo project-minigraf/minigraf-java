@@ -17,6 +17,7 @@ jobs:
       tag: ${{ steps.ver.outputs.tag }}
       semver: ${{ steps.ver.outputs.semver }}
       sha: ${{ steps.commit.outputs.sha }}
+      base: ${{ steps.base.outputs.branch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +28,32 @@ jobs:
           V="${{ github.event.client_payload.version || github.event.inputs.version }}"
           echo "tag=$V" >> "$GITHUB_OUTPUT"
           echo "semver=${V#v}" >> "$GITHUB_OUTPUT"
+
+      # Releases build from main, except when a maintenance branch v<major>.x
+      # exists for the dispatched version's major (e.g. v2.x for a 2.0.3 core
+      # patch after main has moved to v3). This keeps breaking changes on main
+      # out of patch releases of an older line.
+      - name: Select base branch
+        id: base
+        env:
+          SEMVER: ${{ steps.ver.outputs.semver }}
+        run: |
+          MAJOR="${SEMVER%%.*}"
+          MAINT="v$MAJOR.x"
+          if git ls-remote --exit-code --heads origin "$MAINT" >/dev/null; then
+            git fetch origin "$MAINT"
+            git checkout -B "$MAINT" FETCH_HEAD
+            BRANCH="$MAINT"
+          else
+            PINNED=$(sed -n 's/^minigraf = "=\{0,1\}\([0-9]*\)\..*/\1/p' Cargo.toml)
+            if [ -n "$PINNED" ] && [ "$PINNED" -gt "$MAJOR" ]; then
+              echo "::error::main is on minigraf $PINNED.x but $SEMVER was dispatched and there is no $MAINT branch. Create $MAINT from the last $MAJOR.x release tag and re-run."
+              exit 1
+            fi
+            BRANCH=main
+          fi
+          echo "Releasing $SEMVER from $BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -55,8 +82,8 @@ jobs:
       - name: Update Cargo.lock
         run: cargo update --precise "${{ steps.ver.outputs.semver }}" minigraf
 
-      # Push the pin commit to a throwaway branch only. The tag and main are
-      # updated by the tag job, after the test job has passed on this commit.
+      # Push the pin commit to a throwaway branch only. The tag and the base
+      # branch are updated by the tag job, after the test job has passed on this commit.
       - name: Commit and push release branch
         id: commit
         run: |
@@ -71,8 +98,10 @@ jobs:
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           git push --force origin "HEAD:refs/heads/release/${{ steps.ver.outputs.tag }}"
 
-  # Run this binding's test suite against the exact pinned core version before
-  # anything becomes visible: no tag, no main update, no publish until it passes.
+  # Run this binding's test suite against the exact pinned core version, and
+  # build every native from that commit, before anything becomes visible: no
+  # tag, no base-branch update, no publish until it passes. The natives are uploaded
+  # as artifacts of this run and picked up by assemble-and-publish.
   test:
     name: Test pinned release
     needs: prepare
@@ -81,7 +110,7 @@ jobs:
       ref: ${{ needs.prepare.outputs.sha }}
 
   tag:
-    name: Push tag and update main
+    name: Push tag and update ${{ needs.prepare.outputs.base }}
     needs: [prepare, test]
     runs-on: ubuntu-latest
     steps:
@@ -89,87 +118,34 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           token: ${{ secrets.MINIGRAF_RELEASE_TOKEN }}
-          # Parent commit (= main) so git can verify the main push is a fast-forward.
+          # Parent commit (= base branch) so git can verify the push is a fast-forward.
           fetch-depth: 2
 
-      - name: Push tag, fast-forward main, delete release branch
+      - name: Push tag, fast-forward base branch, delete release branch
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
           SHA: ${{ needs.prepare.outputs.sha }}
+          BASE: ${{ needs.prepare.outputs.base }}
         run: |
           EXISTING=$(git ls-remote origin "refs/tags/$TAG" | cut -f1)
           if [ -z "$EXISTING" ]; then
-            REFS=("$SHA:refs/heads/main" "$SHA:refs/tags/$TAG")
+            REFS=("$SHA:refs/heads/$BASE" "$SHA:refs/tags/$TAG")
           elif [ "$EXISTING" = "$SHA" ]; then
             echo "Tag $TAG already points at $SHA, skipping tag push"
-            REFS=("$SHA:refs/heads/main")
+            REFS=("$SHA:refs/heads/$BASE")
           else
             echo "::error::Tag $TAG already exists at $EXISTING, but the tested commit is $SHA. Delete the tag and re-run to release the tested commit."
             exit 1
           fi
-          # Atomic: main and the tag move together or not at all. Rejected if
-          # main moved during the release; re-run to re-pin on the new main.
+          # Atomic: the base branch and the tag move together or not at all.
+          # Rejected if the branch moved during the release; re-run to re-pin.
           git push --atomic origin "${REFS[@]}"
           git push origin --delete "release/$TAG" \
             || echo "::warning::Could not delete branch release/$TAG"
 
-  build-natives:
-    name: Build native (${{ matrix.target }})
-    needs: [prepare, tag]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            native-dir: linux/x86_64
-            lib-name: libminigraf_ffi.so
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            native-dir: linux/aarch64
-            lib-name: libminigraf_ffi.so
-          - os: macos-14
-            target: universal2
-            native-dir: macos/universal
-            lib-name: libminigraf_ffi.dylib
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            native-dir: windows/x86_64
-            lib-name: minigraf_ffi.dll
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.prepare.outputs.tag }}
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target == 'universal2' && 'aarch64-apple-darwin x86_64-apple-darwin' || matrix.target }}
-
-      - name: Build (universal2)
-        if: matrix.target == 'universal2'
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          lipo -create \
-            target/aarch64-apple-darwin/release/libminigraf_ffi.dylib \
-            target/x86_64-apple-darwin/release/libminigraf_ffi.dylib \
-            -output libminigraf_ffi.dylib
-
-      - name: Build (other)
-        if: matrix.target != 'universal2'
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Upload native
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-${{ matrix.native-dir == 'linux/x86_64' && 'linux-x64' || matrix.native-dir == 'linux/aarch64' && 'linux-arm64' || matrix.native-dir == 'macos/universal' && 'macos' || 'windows' }}
-          path: |
-            ${{ matrix.target == 'universal2' && 'libminigraf_ffi.dylib' || format('target/{0}/release/{1}', matrix.target, matrix.lib-name) }}
-
   assemble-and-publish:
     name: Assemble fat JAR and publish to Maven Central
-    needs: [prepare, build-natives, tag]
+    needs: [prepare, test, tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -193,12 +169,20 @@ jobs:
       - name: Copy natives into resources
         run: |
           RESOURCES=java/src/main/resources/natives
-          mkdir -p "$RESOURCES/linux/x86_64" "$RESOURCES/linux/aarch64" \
-                   "$RESOURCES/macos/universal" "$RESOURCES/windows/x86_64"
-          cp natives-staging/native-linux-x64/libminigraf_ffi.so  "$RESOURCES/linux/x86_64/"
-          cp natives-staging/native-linux-arm64/libminigraf_ffi.so "$RESOURCES/linux/aarch64/"
-          cp natives-staging/native-macos/libminigraf_ffi.dylib    "$RESOURCES/macos/universal/"
-          cp natives-staging/native-windows/minigraf_ffi.dll       "$RESOURCES/windows/x86_64/"
+          # <rust target>:<resource dir>; must match NativeLoader.resolve().
+          for pair in \
+              x86_64-unknown-linux-gnu:linux/x86_64 \
+              aarch64-unknown-linux-gnu:linux/aarch64 \
+              x86_64-unknown-linux-musl:linux-musl/x86_64 \
+              aarch64-unknown-linux-musl:linux-musl/aarch64 \
+              universal2:macos/universal \
+              x86_64-pc-windows-msvc:windows/x86_64 \
+              aarch64-pc-windows-msvc:windows/aarch64; do
+            target="${pair%%:*}"; dir="${pair#*:}"
+            mkdir -p "$RESOURCES/$dir"
+            cp natives-staging/native-$target/* "$RESOURCES/$dir/"
+          done
+          find "$RESOURCES" -type f | sort
 
       - name: Build Rust library for bindgen
         run: cargo build --release

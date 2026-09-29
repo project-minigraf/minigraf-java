@@ -9,7 +9,7 @@ single-file, embedded bi-temporal graph database with Datalog queries.
 
 ```kotlin
 dependencies {
-    implementation("io.github.project-minigraf:minigraf-jvm:1.2.0")
+    implementation("io.github.project-minigraf:minigraf-jvm:2.0.2")
 }
 ```
 
@@ -19,7 +19,7 @@ dependencies {
 <dependency>
     <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>1.2.0</version>
+    <version>2.0.2</version>
 </dependency>
 ```
 
@@ -32,6 +32,9 @@ val db = MiniGrafDb.openInMemory()
 val result = db.execute("""(transact [[:alice :name "Alice"]])""")
 println(result)  // {"transacted":1}
 ```
+
+From Java, use `io.github.project_minigraf.minigraf.Minigraf.openInMemory()` / `Minigraf.open(path)`.
+See [java/README.md](java/README.md) for supported platforms and Java usage.
 
 ## Building from source
 
@@ -47,7 +50,7 @@ cd java
 
 This repo receives a `core-release` repository_dispatch from the minigraf monorepo
 cascade whenever a new version of the `minigraf` core crate is published. The release
-workflow pins the new version, commits, tags, builds native libraries for all four
+workflow pins the new version, commits, tags, builds native libraries for all supported
 platforms, and publishes the fat JAR to Maven Central.
 
 ## License
