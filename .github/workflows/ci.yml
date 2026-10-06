@@ -77,6 +77,7 @@ jobs:
         working-directory: java
         run: |
           ./gradlew generateKotlinBindings copyLocalNative
+          ls -la /lib | head -40; ls -la ../target/release | head -40; find src/main/resources/natives -type f; rustc -vV
           # Fails if musl detection sent the native to the glibc directory.
           test -f src/main/resources/natives/linux-musl/x86_64/libminigraf_ffi.so
 
