@@ -65,15 +65,32 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
+      # release.yml runs this workflow from main against the pinned commit, which
+      # for a v2.x core patch is on the v2.x branch. v2.x predates musl support
+      # (no musl detection in copyLocalNative or NativeLoader), so there is
+      # nothing to test on Alpine there.
+      - name: Check musl support in tested commit
+        id: musl
+        run: |
+          if grep -q 'ld-musl' java/build.gradle.kts; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Tested commit has no musl support; skipping Alpine tests."
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Rust
+        if: steps.musl.outputs.supported == 'true'
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Build Rust library (release)
+        if: steps.musl.outputs.supported == 'true'
         run: cargo build --release
 
       - name: Generate Kotlin bindings + copy local native
+        if: steps.musl.outputs.supported == 'true'
         working-directory: java
         run: |
           ./gradlew generateKotlinBindings copyLocalNative
@@ -81,6 +98,7 @@ jobs:
           test -f src/main/resources/natives/linux-musl/x86_64/libminigraf_ffi.so
 
       - name: Run tests
+        if: steps.musl.outputs.supported == 'true'
         working-directory: java
         run: ./gradlew test
 
