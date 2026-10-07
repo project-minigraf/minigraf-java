@@ -63,6 +63,8 @@ val generateKotlinBindings by tasks.registering(Exec::class) {
     dependsOn(buildUniffiBindgen)
     workingDir = File(repoRoot)
     inputs.file(libPath)
+    // Renames for the Kotlin bindings live here (see uniffi.toml).
+    inputs.file("$repoRoot/uniffi.toml")
     outputs.dir(generatedSourcesDir)
     // Start from an empty dir so classes from an earlier package layout
     // (e.g. before uniffi.toml set package_name) cannot linger and clash.

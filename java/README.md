@@ -81,6 +81,46 @@ db.checkpoint();
 
 The bindings are generated Kotlin, so `kotlin-stdlib` is a transitive runtime dependency and ends up on Java classpaths too. JPMS users can require the automatic module `io.github.project_minigraf.minigraf`.
 
+## Open options, cursors, the fact log and the log writer
+
+```java
+import io.github.project_minigraf.minigraf.*;
+
+// Read-only: shared lock, nothing written; writes fail with API-014.
+MiniGrafDb src = Minigraf.openWithOptions("old.graph",
+        Minigraf.options().readOnly(true).pageCacheSize(4096).build());
+
+// A cursor's answer is fixed when it opens. Each batch is a JSON array of rows,
+// encoded like execute()'s "results".
+try (MiniGrafCursor cursor = src.query("(query [:find ?n :where [?e :name ?n]])")) {
+    for (String batch : Minigraf.batches(cursor, 1000)) { /* parse rows */ }
+}
+
+// Copy every fact version, keeping tx and valid-time bounds, into a new file.
+try (MiniGrafFactLog log = src.factLog(Minigraf.filter().build());
+     MiniGrafLogWriter out = Minigraf.createLogWriter("new.graph", Minigraf.options().build())) {
+    List<FactRecord> batch = new ArrayList<>();
+    for (FactRecord rec : Minigraf.records(log, 1000)) {
+        if (!rec.getAttribute().startsWith(":secret/")) batch.add(rec);
+    }
+    out.appendBatch(batch);
+    out.advanceTxCount(src.currentTxCount());
+    out.finish();
+}   // close() without finish() abandons the build and leaves no file
+```
+
+Kotlin callers can use `cursor.batches()` and `log.records()` directly, and the
+generated constructors with named arguments (`OpenOptions(readOnly = true)`).
+
+All UniFFI objects are `AutoCloseable`: `close()` frees the native object. The
+shim's own close methods are named `release()` (cursor, fact log) and `abandon()`
+(log writer) here, because `close()` is taken.
+
+A record's value is a `MiniGrafValue` (`Text`, `Int64`, `Float64`, `Bool`, `Ref`,
+`Keyword`, `Null`), so a ref and a string stay different. `Minigraf.VALID_TIME_FOREVER`
+is the `validTo` of a fact valid forever. Errors are `MiniGrafException`;
+`Minigraf.errorMessage(e)` gives the text starting with its code, such as `[API-015]`.
+
 ## Links
 
 - [Full Java/JVM integration guide](https://github.com/project-minigraf/minigraf/wiki/Use-Cases#java--jvm)
