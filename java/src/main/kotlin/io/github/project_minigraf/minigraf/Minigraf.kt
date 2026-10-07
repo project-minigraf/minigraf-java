@@ -11,6 +11,12 @@ object Minigraf {
     /** `valid_to` of a fact that is valid forever. */
     const val VALID_TIME_FOREVER: Long = Long.MAX_VALUE
 
+    /**
+     * `walCheckpointThreshold` that never checkpoints: no automatic checkpoint and
+     * none when the handle closes. Call `checkpoint()` yourself.
+     */
+    const val WAL_CHECKPOINT_NEVER: Long = Long.MAX_VALUE
+
     /** Opens (or creates) a file-backed database at [path]. */
     @JvmStatic
     @Throws(MiniGrafException::class)
