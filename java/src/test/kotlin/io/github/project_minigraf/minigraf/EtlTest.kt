@@ -98,6 +98,15 @@ class EtlTest {
     }
 
     @Test
+    fun walCheckpointNeverKeepsTheWalOnClose() {
+        val p = path("never.graph")
+        Minigraf.openWithOptions(p, Minigraf.options().walCheckpointThreshold(Minigraf.WAL_CHECKPOINT_NEVER).build()).use {
+            it.execute("(transact [[:a :n 1]])")
+        }
+        assertTrue(File("$p.wal").exists(), "WAL kept on close (#322)")
+    }
+
+    @Test
     fun factLogRecordsAndFilters() {
         val db = source(path("s.graph"))
         val records = log(db)
