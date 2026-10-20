@@ -1,0 +1,222 @@
+name: Package
+
+# Builds the fat JAR exactly as the release publishes it, stamped with
+# `version`, and uploads:
+#   native-<target>  each platform's native library, copied into the jar;
+#                    the release's publish job rebuilds the jar from these
+#   dist-jar         the Maven repository layout (build/m2): jar, sources and
+#                    javadoc jars, pom, module
+# Unsigned: the release rebuilds from the same commit, checks the jars are
+# byte-identical to the tested ones, then signs and publishes.
+#
+# release.yml also runs this, through ci.yml, for v2.x patch releases with
+# `ref` on the v2.x branch, so it must build that branch's sources too.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+        default: ''
+      version:
+        required: true
+        type: string
+      artifact-prefix:
+        description: 'Prefix for the uploaded artifact names, so one run can package two refs'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  natives:
+    name: Build native (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux targets use cargo-zigbuild to pin an old glibc floor (2.17)
+          # instead of the runner's, so RHEL 8, Debian 11 etc. can load them.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zig-target: x86_64-unknown-linux-gnu.2.17
+            native-dir: linux/x86_64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            zig-target: aarch64-unknown-linux-gnu.2.17
+            native-dir: linux/aarch64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            zig-target: x86_64-unknown-linux-musl
+            native-dir: linux-musl/x86_64
+            lib-name: libminigraf_ffi.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            zig-target: aarch64-unknown-linux-musl
+            native-dir: linux-musl/aarch64
+            lib-name: libminigraf_ffi.so
+          - os: macos-14
+            target: universal2
+            native-dir: macos/universal
+            lib-name: libminigraf_ffi.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            native-dir: windows/x86_64
+            lib-name: minigraf_ffi.dll
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            native-dir: windows/aarch64
+            lib-name: minigraf_ffi.dll
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target == 'universal2' && 'aarch64-apple-darwin x86_64-apple-darwin' || matrix.target }}
+
+      - uses: actions/setup-python@v5
+        if: matrix.zig-target
+        with:
+          python-version: '3.x'
+
+      - name: Install zig and cargo-zigbuild
+        if: matrix.zig-target
+        run: pip install ziglang cargo-zigbuild
+
+      - name: Build (universal2)
+        if: matrix.target == 'universal2'
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p out
+          lipo -create \
+            target/aarch64-apple-darwin/release/libminigraf_ffi.dylib \
+            target/x86_64-apple-darwin/release/libminigraf_ffi.dylib \
+            -output out/libminigraf_ffi.dylib
+
+      - name: Build (Linux, zigbuild)
+        if: matrix.zig-target
+        # musl defaults to crt-static, under which rustc drops the cdylib output.
+        env:
+          RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
+        run: |
+          cargo zigbuild --release --lib --target ${{ matrix.zig-target }}
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build --release --lib --target ${{ matrix.target }}
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
+
+      - name: Show dynamic dependencies
+        if: runner.os == 'Linux'
+        run: readelf -d out/${{ matrix.lib-name }} | grep NEEDED
+
+      - name: Check glibc floor
+        if: endsWith(matrix.target, '-linux-gnu')
+        run: |
+          MAX=$(objdump -T out/${{ matrix.lib-name }} | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
+          echo "Highest required glibc: $MAX"
+          if [ "$(printf '%s\n2.17\n' "$MAX" | sort -V | tail -1)" != "2.17" ]; then
+            echo "::error::${{ matrix.lib-name }} requires glibc $MAX, above the 2.17 floor"
+            exit 1
+          fi
+
+      - name: Upload native
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-prefix }}native-${{ matrix.target }}
+          path: out/${{ matrix.lib-name }}
+          if-no-files-found: error
+
+  jar:
+    name: Assemble fat JAR
+    needs: natives
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Download all natives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact-prefix }}native-*
+          path: natives-staging
+          merge-multiple: false
+
+      - name: Copy natives into resources
+        run: |
+          RESOURCES=java/src/main/resources/natives
+          # <rust target>:<resource dir>; must match NativeLoader.resolve().
+          for pair in \
+              x86_64-unknown-linux-gnu:linux/x86_64 \
+              aarch64-unknown-linux-gnu:linux/aarch64 \
+              x86_64-unknown-linux-musl:linux-musl/x86_64 \
+              aarch64-unknown-linux-musl:linux-musl/aarch64 \
+              universal2:macos/universal \
+              x86_64-pc-windows-msvc:windows/x86_64 \
+              aarch64-pc-windows-msvc:windows/aarch64; do
+            target="${pair%%:*}"; dir="${pair#*:}"
+            mkdir -p "$RESOURCES/$dir"
+            cp "natives-staging/${{ inputs.artifact-prefix }}native-$target/"* "$RESOURCES/$dir/"
+          done
+          find "$RESOURCES" -type f | sort
+
+      - name: Build Rust library for bindgen
+        run: cargo build --release
+
+      - name: Build and publish to build/m2
+        working-directory: java
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: ./gradlew --no-daemon generateKotlinBindings publishReleasePublicationToDistRepository
+
+      - name: Check the jar contents
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          DIR=java/build/m2/io/github/project-minigraf/minigraf-jvm/$VERSION
+          JAR=$DIR/minigraf-jvm-$VERSION.jar
+          unzip -l "$JAR" | awk '{print $4}' | grep -q '/MiniGrafDb.class$' \
+            || { echo "::error::the jar has no MiniGrafDb class"; exit 1; }
+          NATIVES=$(unzip -l "$JAR" | awk '{print $4}' | grep '^natives/.*\.\(so\|dylib\|dll\)$' | sort)
+          echo "$NATIVES"
+          [ "$(echo "$NATIVES" | wc -l)" -eq 7 ] || { echo "::error::expected 7 natives in the jar"; exit 1; }
+          grep -q '<artifactId>jna</artifactId>' "$DIR/minigraf-jvm-$VERSION.pom" \
+            || { echo "::error::pom does not declare JNA"; exit 1; }
+
+      # The release rebuilds the jars from the same commit and refuses to
+      # publish unless they are byte-identical to these. Prove here, on every
+      # PR, that a clean rebuild is identical.
+      - name: Check the build is reproducible
+        working-directory: java
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          DIR=io/github/project-minigraf/minigraf-jvm/$RELEASE_VERSION
+          cp -r "build/m2/$DIR" "$RUNNER_TEMP/first"
+          ./gradlew --no-daemon clean generateKotlinBindings publishReleasePublicationToDistRepository
+          diff -r "$RUNNER_TEMP/first" "build/m2/$DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-prefix }}dist-jar
+          path: java/build/m2
+          if-no-files-found: error
