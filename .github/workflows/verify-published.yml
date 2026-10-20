@@ -1,0 +1,109 @@
+name: Verify published
+
+# Installs minigraf-jvm <version> from Maven Central, as a user's app
+# would, and runs the consumer test on it. A failure means a broken release is
+# public: the run fails and an issue labelled release-broken is opened (or
+# commented on, if one is open for this version).
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      ref:
+        description: 'Ref whose consumer-test/ to run (release.yml passes the release tag)'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Published version (e.g. 2.0.9)'
+        required: true
+        type: string
+      ref:
+        description: 'Ref whose consumer-test/ to run (default: the branch dispatched from)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  wait:
+    name: Wait for Maven Central
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for the pom (up to 90 minutes)
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          URL="https://repo1.maven.org/maven2/io/github/project-minigraf/minigraf-jvm/$VERSION/minigraf-jvm-$VERSION.pom"
+          for i in $(seq 1 180); do
+            curl -sfI -o /dev/null "$URL" && { echo "available after $i checks"; exit 0; }
+            sleep 30
+          done
+          echo "::error::$URL did not appear within 90 minutes"
+          exit 1
+
+  verify:
+    name: Consumer test from Maven Central (${{ matrix.name }})
+    needs: wait
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, java: '17', distribution: temurin }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, java: '17', distribution: temurin }
+          - { name: macos, os: macos-14, java: '17', distribution: temurin }
+          - { name: windows-x86_64, os: windows-latest, java: '17', distribution: temurin }
+          - { name: windows-aarch64, os: windows-11-arm, java: '17', distribution: microsoft }
+          - { name: alpine, os: ubuntu-latest, container: 'eclipse-temurin:17-jdk-alpine' }
+    steps:
+      - name: Install bash and curl
+        if: matrix.container
+        run: apk add --no-cache bash curl
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-java@v4
+        if: ${{ !matrix.container }}
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: ${{ matrix.distribution }}
+
+      - name: Run consumer test
+        shell: bash
+        run: bash consumer-test/run.sh registry ${{ inputs.version }}
+
+  report:
+    name: Report broken release
+    needs: [wait, verify]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open or update the release-broken issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ inputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create release-broken --repo "$REPO" --color B60205 \
+            --description "A published release does not install or run" --force
+          TITLE="v$VERSION published but unusable: consumer test failed (Maven Central)"
+          BODY="The consumer test failed against minigraf-jvm $VERSION installed from Maven Central. Run: $RUN_URL"
+          NUMBER=$(gh issue list --repo "$REPO" --label release-broken --state open \
+            --search "\"v$VERSION published\" in:title" --json number -q '.[0].number')
+          if [ -n "$NUMBER" ]; then
+            gh issue comment "$NUMBER" --repo "$REPO" --body "$BODY"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --label bug --label release-broken --body "$BODY"
+          fi
