@@ -9,7 +9,7 @@ single-file, embedded bi-temporal graph database with Datalog queries.
 
 ```kotlin
 dependencies {
-    implementation("io.github.project-minigraf:minigraf-jvm:1.2.0")
+    implementation("io.github.project-minigraf:minigraf-jvm:2.0.8")
 }
 ```
 
@@ -19,18 +19,18 @@ dependencies {
 <dependency>
     <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>1.2.0</version>
+    <version>2.0.8</version>
 </dependency>
 ```
 
 ## Quick start
 
 ```kotlin
-import io.github.project_minigraf.minigraf.MiniGrafDb
+import uniffi.minigraf_ffi.MiniGrafDb
 
 val db = MiniGrafDb.openInMemory()
 val result = db.execute("""(transact [[:alice :name "Alice"]])""")
-println(result)  // {"transacted":1}
+println(result)  // {"transacted":<tx id>}
 ```
 
 ## Building from source

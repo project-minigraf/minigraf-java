@@ -110,14 +110,19 @@ tasks.withType<org.gradle.api.tasks.bundling.AbstractArchiveTask>().configureEac
 val copyLocalNative by tasks.registering(Copy::class) {
     group = "codegen"
     description = "Copy local platform native into resources (dev only)"
+    // Mirrors NativeLoader.resolve() so the loader finds the local native.
     val os = System.getProperty("os.name").lowercase()
-    val arch = System.getProperty("os.arch").lowercase()
+    val arch = when (System.getProperty("os.arch").lowercase()) {
+        "amd64", "x86_64", "x86-64" -> "x86_64"
+        "aarch64", "arm64" -> "aarch64"
+        else -> throw GradleException("Unsupported architecture: ${System.getProperty("os.arch")}")
+    }
+    val musl = File("/lib").listFiles { f -> f.name.startsWith("ld-musl-") }?.isNotEmpty() == true
     val (osKey, nativeName) = when {
-        "linux" in os && ("aarch64" in arch || "arm64" in arch) ->
-            "linux/aarch64" to "libminigraf_ffi.so"
-        "linux" in os -> "linux/x86_64" to "libminigraf_ffi.so"
-        "mac" in os -> "macos/universal" to "libminigraf_ffi.dylib"
-        "windows" in os -> "windows/x86_64" to "minigraf_ffi.dll"
+        os.startsWith("linux") && musl -> "linux-musl/$arch" to "libminigraf_ffi.so"
+        os.startsWith("linux") -> "linux/$arch" to "libminigraf_ffi.so"
+        os.startsWith("mac") -> "macos/universal" to "libminigraf_ffi.dylib"
+        os.startsWith("windows") -> "windows/$arch" to "minigraf_ffi.dll"
         else -> throw GradleException("Unsupported platform: $os $arch")
     }
     from(File("$repoRoot/target/release/$nativeName"))
@@ -131,7 +136,21 @@ java {
     withJavadocJar()
 }
 
+// Reproducible archives: the release rebuilds the jars from the tested commit
+// and refuses to publish unless they are byte-identical to the tested ones.
+tasks.withType<org.gradle.api.tasks.bundling.AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
 publishing {
+    // build/m2: the layout CI consumer-tests and the release compares against.
+    repositories {
+        maven {
+            name = "dist"
+            url = uri(layout.buildDirectory.dir("m2"))
+        }
+    }
     publications {
         create<MavenPublication>("release") {
             from(components["java"])

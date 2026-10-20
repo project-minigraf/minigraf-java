@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'v*.x']
   pull_request:
   workflow_call:
     inputs:
@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: ''
+      version:
+        description: 'Version stamped into the jar (release.yml passes the release version)'
+        required: false
+        type: string
+        default: '0.0.0-ci'
 
 jobs:
   rust-test:
@@ -47,3 +52,152 @@ jobs:
       - name: Run tests
         working-directory: java
         run: ./gradlew test
+
+  # Runs the Java tests on musl libc, so NativeLoader's musl detection and the
+  # linux-musl native are exercised at runtime rather than only built.
+  java-test-alpine:
+    name: Java tests (Alpine / musl)
+    runs-on: ubuntu-latest
+    container: eclipse-temurin:17-jdk-alpine
+    env:
+      # musl defaults to crt-static, under which rustc drops the cdylib output.
+      RUSTFLAGS: -C target-feature=-crt-static
+    steps:
+      - name: Install build dependencies
+        run: apk add --no-cache bash curl gcc git musl-dev
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      # release.yml runs this workflow from main against the pinned commit, which
+      # for a v2.x core patch is on the v2.x branch. v2.x predates musl support
+      # (no musl detection in copyLocalNative or NativeLoader), so there is
+      # nothing to test on Alpine there.
+      - name: Check musl support in tested commit
+        id: musl
+        run: |
+          if grep -q 'ld-musl' java/build.gradle.kts; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Tested commit has no musl support; skipping Alpine tests."
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Rust
+        if: steps.musl.outputs.supported == 'true'
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build Rust library (release)
+        if: steps.musl.outputs.supported == 'true'
+        run: cargo build --release
+
+      - name: Generate Kotlin bindings + copy local native
+        if: steps.musl.outputs.supported == 'true'
+        working-directory: java
+        run: |
+          ./gradlew generateKotlinBindings copyLocalNative
+          # Fails if musl detection sent the native to the glibc directory.
+          test -f src/main/resources/natives/linux-musl/x86_64/libminigraf_ffi.so
+
+      - name: Run tests
+        if: steps.musl.outputs.supported == 'true'
+        working-directory: java
+        run: ./gradlew test
+
+  # Builds every native and the fat JAR, as the release publishes them.
+  # release.yml calls this workflow, so the jar is built and consumer-tested at
+  # the release version from the tested commit before anything is tagged.
+  package:
+    name: Package
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: ${{ inputs.ref }}
+      version: ${{ inputs.version || '0.0.0-ci' }}
+
+  # A Gradle project that depends on the built jar by Maven coordinates runs
+  # the README quick start (Kotlin) and the consumer contract (Java) on every
+  # platform the jar ships a native for.
+  consumer:
+    name: Consumer test (${{ matrix.name }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, java: '17', distribution: temurin }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, java: '17', distribution: temurin }
+          - { name: macos, os: macos-14, java: '17', distribution: temurin }
+          - { name: windows-x86_64, os: windows-latest, java: '17', distribution: temurin }
+          # Temurin has no Windows arm64 build of 17.
+          - { name: windows-aarch64, os: windows-11-arm, java: '17', distribution: microsoft }
+          # The image brings its JDK; musl, so the linux-musl native is loaded.
+          - { name: alpine, os: ubuntu-latest, container: 'eclipse-temurin:17-jdk-alpine' }
+    steps:
+      - name: Install bash and curl
+        if: matrix.container
+        run: apk add --no-cache bash curl
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-java@v4
+        if: ${{ !matrix.container }}
+        with:
+          java-version: ${{ matrix.java }}
+          distribution: ${{ matrix.distribution }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-jar
+          path: dist-jar
+
+      - name: Run consumer test
+        shell: bash
+        run: bash consumer-test/run.sh local dist-jar ${{ inputs.version || '0.0.0-ci' }}
+
+  # 2.0.x patch releases build the v2.x branch with main's workflows
+  # (release.yml selects the base branch). On a PR to main, package and
+  # consumer-test v2.x with this PR's workflows, so a workflow change that
+  # breaks the v2.x release fails here rather than at release time.
+  package-v2x:
+    name: Package v2.x
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: v2.x
+      version: 0.0.0-ci
+      artifact-prefix: v2x-
+
+  consumer-v2x:
+    name: Consumer test v2.x (linux-x86_64)
+    needs: package-v2x
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2.x
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/download-artifact@v4
+        with:
+          name: v2x-dist-jar
+          path: dist-jar
+      - name: Run consumer test
+        run: bash consumer-test/run.sh local dist-jar 0.0.0-ci
+
+  readme-sync:
+    name: README quick start matches the consumer test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - run: python3 -I consumer-test/readme_sync.py README.md consumer-test/src/test/kotlin/QuickstartTest.kt
