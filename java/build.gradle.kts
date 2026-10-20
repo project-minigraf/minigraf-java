@@ -148,6 +148,13 @@ java {
     withJavadocJar()
 }
 
+// Reproducible archives: the release rebuilds the jars from the tested commit
+// and refuses to publish unless they are byte-identical to the tested ones.
+tasks.withType<org.gradle.api.tasks.bundling.AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
 tasks.jar {
     manifest {
         attributes(
@@ -159,6 +166,13 @@ tasks.jar {
 }
 
 publishing {
+    // build/m2: the layout CI consumer-tests and the release compares against.
+    repositories {
+        maven {
+            name = "dist"
+            url = uri(layout.buildDirectory.dir("m2"))
+        }
+    }
     publications {
         create<MavenPublication>("release") {
             from(components["java"])
