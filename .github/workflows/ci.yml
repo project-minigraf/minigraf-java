@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: ''
+      version:
+        description: 'Version stamped into the jar (release.yml passes the release version)'
+        required: false
+        type: string
+        default: '0.0.0-ci'
 
 jobs:
   rust-test:
@@ -102,114 +107,97 @@ jobs:
         working-directory: java
         run: ./gradlew test
 
-  # Builds every native the fat JAR ships. release.yml calls this workflow, so
-  # these artifacts are built from the tested commit before anything is tagged,
-  # and the publish job downloads them from the same run.
-  build-natives:
-    name: Build native (${{ matrix.target }})
+  # Builds every native and the fat JAR, as the release publishes them.
+  # release.yml calls this workflow, so the jar is built and consumer-tested at
+  # the release version from the tested commit before anything is tagged.
+  package:
+    name: Package
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: ${{ inputs.ref }}
+      version: ${{ inputs.version || '0.0.0-ci' }}
+
+  # A Gradle project that depends on the built jar by Maven coordinates runs
+  # the README quick start (Kotlin) and the consumer contract (Java) on every
+  # platform the jar ships a native for.
+  consumer:
+    name: Consumer test (${{ matrix.name }})
+    needs: package
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux targets use cargo-zigbuild to pin an old glibc floor (2.17)
-          # instead of the runner's, so RHEL 8, Debian 11 etc. can load them.
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            zig-target: x86_64-unknown-linux-gnu.2.17
-            native-dir: linux/x86_64
-            lib-name: libminigraf_ffi.so
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            zig-target: aarch64-unknown-linux-gnu.2.17
-            native-dir: linux/aarch64
-            lib-name: libminigraf_ffi.so
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            zig-target: x86_64-unknown-linux-musl
-            native-dir: linux-musl/x86_64
-            lib-name: libminigraf_ffi.so
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-musl
-            zig-target: aarch64-unknown-linux-musl
-            native-dir: linux-musl/aarch64
-            lib-name: libminigraf_ffi.so
-          - os: macos-14
-            target: universal2
-            native-dir: macos/universal
-            lib-name: libminigraf_ffi.dylib
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            native-dir: windows/x86_64
-            lib-name: minigraf_ffi.dll
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            native-dir: windows/aarch64
-            lib-name: minigraf_ffi.dll
+          - { name: linux-x86_64, os: ubuntu-latest, java: '17', distribution: temurin }
+          - { name: linux-aarch64, os: ubuntu-24.04-arm, java: '17', distribution: temurin }
+          - { name: macos, os: macos-14, java: '17', distribution: temurin }
+          - { name: windows-x86_64, os: windows-latest, java: '17', distribution: temurin }
+          # Temurin has no Windows arm64 build of 17.
+          - { name: windows-aarch64, os: windows-11-arm, java: '17', distribution: microsoft }
+          # The image brings its JDK; musl, so the linux-musl native is loaded.
+          - { name: alpine, os: ubuntu-latest, container: 'eclipse-temurin:17-jdk-alpine' }
     steps:
+      - name: Install bash and curl
+        if: matrix.container
+        run: apk add --no-cache bash curl
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-java@v4
+        if: ${{ !matrix.container }}
         with:
-          targets: ${{ matrix.target == 'universal2' && 'aarch64-apple-darwin x86_64-apple-darwin' || matrix.target }}
+          java-version: ${{ matrix.java }}
+          distribution: ${{ matrix.distribution }}
 
-      - uses: actions/setup-python@v5
-        if: matrix.zig-target
+      - uses: actions/download-artifact@v4
         with:
-          python-version: '3.x'
+          name: dist-jar
+          path: dist-jar
 
-      - name: Install zig and cargo-zigbuild
-        if: matrix.zig-target
-        run: pip install ziglang cargo-zigbuild
-
-      - name: Build (universal2)
-        if: matrix.target == 'universal2'
-        run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          mkdir -p out
-          lipo -create \
-            target/aarch64-apple-darwin/release/libminigraf_ffi.dylib \
-            target/x86_64-apple-darwin/release/libminigraf_ffi.dylib \
-            -output out/libminigraf_ffi.dylib
-
-      - name: Build (Linux, zigbuild)
-        if: matrix.zig-target
-        # musl defaults to crt-static, under which rustc drops the cdylib output.
-        env:
-          RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=-crt-static' || '' }}
-        run: |
-          cargo zigbuild --release --lib --target ${{ matrix.zig-target }}
-          mkdir -p out
-          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
+      - name: Run consumer test
         shell: bash
-        run: |
-          cargo build --release --lib --target ${{ matrix.target }}
-          mkdir -p out
-          cp target/${{ matrix.target }}/release/${{ matrix.lib-name }} out/
+        run: bash consumer-test/run.sh local dist-jar ${{ inputs.version || '0.0.0-ci' }}
 
-      - name: Show dynamic dependencies
-        if: runner.os == 'Linux'
-        run: readelf -d out/${{ matrix.lib-name }} | grep NEEDED
+  # 2.0.x patch releases build the v2.x branch with main's workflows
+  # (release.yml selects the base branch). On a PR to main, package and
+  # consumer-test v2.x with this PR's workflows, so a workflow change that
+  # breaks the v2.x release fails here rather than at release time.
+  package-v2x:
+    name: Package v2.x
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: v2.x
+      version: 0.0.0-ci
+      artifact-prefix: v2x-
 
-      - name: Check glibc floor
-        if: endsWith(matrix.target, '-linux-gnu')
-        run: |
-          MAX=$(objdump -T out/${{ matrix.lib-name }} | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)
-          echo "Highest required glibc: $MAX"
-          if [ "$(printf '%s\n2.17\n' "$MAX" | sort -V | tail -1)" != "2.17" ]; then
-            echo "::error::${{ matrix.lib-name }} requires glibc $MAX, above the 2.17 floor"
-            exit 1
-          fi
-
-      - name: Upload native
-        uses: actions/upload-artifact@v4
+  consumer-v2x:
+    name: Consumer test v2.x (linux-x86_64)
+    needs: package-v2x
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: native-${{ matrix.target }}
-          path: out/${{ matrix.lib-name }}
-          if-no-files-found: error
+          ref: v2.x
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+      - uses: actions/download-artifact@v4
+        with:
+          name: v2x-dist-jar
+          path: dist-jar
+      - name: Run consumer test
+        run: bash consumer-test/run.sh local dist-jar 0.0.0-ci
+
+  readme-sync:
+    name: README quick start matches the consumer test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - run: python3 -I consumer-test/readme_sync.py README.md consumer-test/src/test/kotlin/QuickstartTest.kt

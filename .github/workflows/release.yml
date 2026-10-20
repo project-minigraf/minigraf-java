@@ -82,6 +82,13 @@ jobs:
       - name: Update Cargo.lock
         run: cargo update --precise "${{ steps.ver.outputs.semver }}" minigraf
 
+      - name: Stamp the version in the README install snippets
+        run: |
+          for f in README.md java/README.md; do
+            sed -i -e 's/\(minigraf-jvm:\)[^"]*"/\1${{ steps.ver.outputs.semver }}"/' \
+                   -e 's|<version>[^<]*</version>|<version>${{ steps.ver.outputs.semver }}</version>|' "$f"
+          done
+
       # Push the pin commit to a throwaway branch only. The tag and the base
       # branch are updated by the tag job, after the test job has passed on this commit.
       - name: Commit and push release branch
@@ -89,7 +96,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
+          git add Cargo.toml Cargo.lock README.md java/README.md
           if ! git diff --cached --quiet; then
             git commit -m "chore: release ${{ steps.ver.outputs.tag }}"
           else
@@ -108,6 +115,9 @@ jobs:
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.prepare.outputs.sha }}
+      # The jar is built and consumer-tested here at the release version;
+      # publish rebuilds it from the same commit and checks it matches.
+      version: ${{ needs.prepare.outputs.semver }}
 
   tag:
     name: Push tag and update ${{ needs.prepare.outputs.base }}
@@ -187,9 +197,32 @@ jobs:
       - name: Build Rust library for bindgen
         run: cargo build --release
 
-      - name: Generate Kotlin bindings
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-jar
+          path: tested
+
+      # nmcp publishes from the Gradle publication, so the jars are rebuilt
+      # here from the tag (the tested commit) and must be byte-identical to
+      # the ones the consumer test ran. package.yml checks on every PR that
+      # the build is reproducible.
+      - name: Rebuild and compare with the tested jars
         working-directory: java
-        run: ./gradlew generateKotlinBindings
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.semver }}
+        run: |
+          ./gradlew --no-daemon generateKotlinBindings publishReleasePublicationToDistRepository
+          DIR=io/github/project-minigraf/minigraf-jvm/$RELEASE_VERSION
+          # Same files, then same bytes. Signing is off in this step; the
+          # publish step adds only the .asc signatures.
+          diff <(ls "../tested/$DIR") <(ls "build/m2/$DIR") \
+            || { echo "::error::the rebuild publishes a different set of files"; exit 1; }
+          for f in ../tested/$DIR/*; do
+            case "$f" in *.md5|*.sha1|*.sha256|*.sha512) continue ;; esac
+            cmp "$f" "build/m2/$DIR/$(basename "$f")" \
+              || { echo "::error::$(basename "$f") differs from the tested artifact"; exit 1; }
+          done
+          echo "Rebuilt artifacts are identical to the tested ones"
 
       - name: Publish to Maven Central
         working-directory: java
@@ -201,3 +234,15 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.semver }}
         run: ./gradlew publishAllPublicationsToCentralPortal
 
+  # Installs the published version from Maven Central and runs the consumer
+  # test; on failure the run fails and a release-broken issue is opened.
+  verify-published:
+    name: Verify the published jar
+    needs: [prepare, assemble-and-publish]
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/verify-published.yml
+    with:
+      version: ${{ needs.prepare.outputs.semver }}
+      ref: ${{ needs.prepare.outputs.tag }}
