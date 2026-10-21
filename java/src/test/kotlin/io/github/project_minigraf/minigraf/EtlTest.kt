@@ -107,6 +107,21 @@ class EtlTest {
     }
 
     @Test
+    fun queryMemoryLimitIsQry012() {
+        // A cartesian product holds one side in full.
+        val product = "(query [:find ?a ?b :where [?a :n _] [?b :m _]])"
+        Minigraf.openWithOptions(path("small.graph"), Minigraf.options().queryMemoryLimit(64).build()).use {
+            it.execute("(transact [[:a :n 1] [:b :m 2]])")
+            val e = assertThrows<MiniGrafException.Query> { it.execute(product) }
+            assertTrue(code(e).startsWith("[QRY-012]"))
+        }
+        Minigraf.openWithOptions(path("max.graph"), Minigraf.options().queryMemoryLimit(Long.MAX_VALUE).build()).use {
+            it.execute("(transact [[:a :n 1] [:b :m 2]])")
+            it.execute(product)
+        }
+    }
+
+    @Test
     fun factLogRecordsAndFilters() {
         val db = source(path("s.graph"))
         val records = log(db)
