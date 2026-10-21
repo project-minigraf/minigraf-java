@@ -78,8 +78,14 @@ class OpenOptionsBuilder internal constructor() {
     fun allowUnlocked(value: Boolean) = apply { options = options.copy(allowUnlocked = value) }
     fun walCheckpointThreshold(entries: Long) = apply { options = options.copy(walCheckpointThreshold = entries) }
     fun maxDerivedFacts(n: Long) = apply { options = options.copy(maxDerivedFacts = n) }
+    /** Deprecated alias of [maxDerivedFacts]; the lower of the two applies. */
     fun maxResults(n: Long) = apply { options = options.copy(maxResults = n) }
     fun synchronous(mode: SyncMode) = apply { options = options.copy(synchronous = mode) }
+    /**
+     * The most bytes one query may hold; a query that would hold more fails with
+     * QRY-012. `Long.MAX_VALUE` means no limit, the default.
+     */
+    fun queryMemoryLimit(bytes: Long) = apply { options = options.copy(queryMemoryLimit = bytes) }
     fun build(): OpenOptions = options
 }
 

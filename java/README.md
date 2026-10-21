@@ -109,6 +109,12 @@ try (MiniGrafFactLog log = src.factLog(Minigraf.filter().build());
 }   // close() without finish() abandons the build and leaves no file
 ```
 
+`Minigraf.options().queryMemoryLimit(bytes)` caps the bytes one query may hold, counted
+per entry by the operators that keep state (join build sides, negation and `or` tables,
+distinct sets, aggregate groups, window rows, rule-derived facts). A query that would
+hold more fails with QRY-012 and frees what it held. The default, and `Long.MAX_VALUE`,
+is no limit. Rows a cursor returns are not counted, so read a large answer with `query()`.
+
 Kotlin callers can use `cursor.batches()` and `log.records()` directly, and the
 generated constructors with named arguments (`OpenOptions(readOnly = true)`).
 
