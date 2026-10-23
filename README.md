@@ -9,7 +9,7 @@ single-file, embedded bi-temporal graph database with Datalog queries.
 
 ```kotlin
 dependencies {
-    implementation("io.github.project-minigraf:minigraf-jvm:2.0.9")
+    implementation("io.github.project-minigraf:minigraf-jvm:2.0.10")
 }
 ```
 
@@ -19,7 +19,7 @@ dependencies {
 <dependency>
     <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>2.0.9</version>
+    <version>2.0.10</version>
 </dependency>
 ```
 
