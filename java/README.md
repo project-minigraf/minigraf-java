@@ -152,6 +152,13 @@ or `Minigraf.entity(uuid)`, `Minigraf.txCount(n)` / `Minigraf.timestamp(ms)` for
 `IllegalArgumentException`. A missing slot is `MiniGrafException.Api` with `[API-022]`,
 a slot in an attribute position `[API-023]`, and a value of the wrong kind `[API-024]`.
 
+A `Set` binds a set value, for `in?` and the other set predicates or a set-valued
+attribute: `pq.execute("ids" to setOf(1, 2, 3))`, or `Set.of(1, 2, 3)` from Java. Its
+elements are the plain values above or a `MiniGrafValue` (`MiniGrafValue.Keyword(":role/admin")`),
+and a `UUID` element is a ref. A set inside a set is `MiniGrafException.Api` with
+`[API-021]`; another kind of element, or a `List`, throws `IllegalArgumentException`. Set
+values come back as JSON arrays from `execute` and as `MiniGrafValue.Set` in fact records.
+
 Errors are `MiniGrafException.Parse`, `.Query`, `.Storage`, `.Api` (a bad argument, a
 closed object, a bind mistake) or `.Other`.
 

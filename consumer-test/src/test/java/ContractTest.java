@@ -11,6 +11,7 @@ import io.github.project_minigraf.minigraf.Minigraf;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class ContractTest {
@@ -50,6 +51,19 @@ class ContractTest {
             }
             String typed = Minigraf.execute(pq, Map.of("name", new MiniGrafValue.Text("Alice")));
             assertTrue(typed.contains("[[\"Alice\"]]"), "a typed value binds");
+        }
+    }
+
+    @Test
+    void setValuesComeBackAndBind() throws Exception {
+        try (MiniGrafDb db = Minigraf.openInMemory()) {
+            db.execute("(transact [[:alice :tags #{1 \"x\"}]])");
+            String tags = db.execute("(query [:find ?t :where [?e :tags ?t]])");
+            assertTrue(tags.contains("[[[\"x\",1]]]"), "a set value comes back as an array");
+            MiniGrafPreparedQuery pq =
+                    db.prepare("(query [:find ?t :where [?e :tags ?t] [(in? 1 $s)]])");
+            String found = Minigraf.execute(pq, Map.of("s", Set.of(1, 2)));
+            assertTrue(found.contains("[[[\"x\",1]]]"), "a set binds");
         }
     }
 
