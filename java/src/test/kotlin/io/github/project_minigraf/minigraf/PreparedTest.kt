@@ -30,8 +30,8 @@ class PreparedTest {
 
     @Test
     fun preparedQueryRunsAgainWithNewBindings() {
-        val pq = db().prepare("(query [:find ?e :where [?e :n \$n]])")
-        for (n in 1..3) assertEquals(1, rows(pq.execute("n" to n)).size)
+        val pq = db().prepare("(query [:find ?x :where [?e :n \$n] [?e :n ?x]])")
+        for (n in 1..3) assertEquals(listOf(listOf<Any?>(n)), rows(pq.execute("n" to n)))
         assertEquals(0, rows(pq.execute("n" to 9L)).size)
     }
 

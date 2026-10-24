@@ -80,10 +80,10 @@ class JavaInteropTest {
     void preparedQueryFromJava() throws Exception {
         MiniGrafDb db = Minigraf.openInMemory();
         db.execute("(transact [[:a :n 1] [:b :n 2] [:a :s \"x\"]])");
-        MiniGrafPreparedQuery pq = db.prepare("(query [:find ?e :where [?e :n $n]])");
+        MiniGrafPreparedQuery pq = db.prepare("(query [:find ?x :where [?e :n $n] [?e :n ?x]])");
         for (long n = 1; n <= 2; n++) {
             String result = Minigraf.execute(pq, Map.of("n", n));
-            assertTrue(result.contains("\"results\":[["), result);
+            assertTrue(result.contains("\"results\":[[" + n + "]]"), result);
         }
         assertTrue(Minigraf.execute(pq, Map.of("n", 9)).contains("\"results\":[]"));
 

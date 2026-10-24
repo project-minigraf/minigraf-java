@@ -42,12 +42,14 @@ class ContractTest {
     void preparedQueryRunsWithPlainAndTypedValues() throws Exception {
         try (MiniGrafDb db = Minigraf.openInMemory()) {
             db.execute("(transact [[:alice :name \"Alice\"] [:bob :name \"Bob\"]])");
-            MiniGrafPreparedQuery pq = db.prepare("(query [:find ?e :where [?e :name $name]])");
+            MiniGrafPreparedQuery pq =
+                    db.prepare("(query [:find ?n :where [?e :name $name] [?e :name ?n]])");
             for (String name : new String[] {"Alice", "Bob"}) {
-                assertTrue(Minigraf.execute(pq, Map.of("name", name)).contains("\"results\":[["), name);
+                String result = Minigraf.execute(pq, Map.of("name", name));
+                assertTrue(result.contains("[[\"" + name + "\"]]"), "prepared query finds " + name);
             }
             String typed = Minigraf.execute(pq, Map.of("name", new MiniGrafValue.Text("Alice")));
-            assertTrue(typed.contains("\"results\":[["), "a typed value binds");
+            assertTrue(typed.contains("[[\"Alice\"]]"), "a typed value binds");
         }
     }
 
