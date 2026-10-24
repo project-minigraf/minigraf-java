@@ -119,4 +119,48 @@ class PreparedTest {
         db.execute("(transact [[:d :n 4]])")
         assertEquals(1, rows(pq.execute("n" to 4)).size)
     }
+
+    // ─── Sets (minigraf#316) ────────────────────────────────────────────────
+
+    @Test
+    fun kotlinSetsBindSetValues() {
+        val pq = db().prepare("(query [:find ?e :where [?e :n ?n] [(in? ?n \$s)]])")
+        assertEquals(2, rows(pq.execute("s" to setOf(1, 3))).size)
+        assertEquals(1, rows(pq.execute("s" to setOf(2L, 2L))).size)
+        assertEquals(0, rows(pq.execute("s" to emptySet<Int>())).size)
+        val typed = MiniGrafValue.Set(listOf(MiniGrafValue.Int64(1), MiniGrafValue.Int64(1)))
+        assertEquals(1, rows(pq.execute("s" to typed)).size)
+    }
+
+    @Test
+    fun setValuesComeBackTypedAndAsArrays() {
+        val db = db()
+        db.execute("(transact [[:a :tags #{1 :k \"x\"}]])")
+        val equal = db.prepare("(query [:find ?x :where [?e :tags \$s] [?e :n ?x]])")
+        val tags = setOf(1, "x", MiniGrafValue.Keyword(":k"))
+        assertEquals(listOf(listOf<Any?>(1)), rows(equal.execute("s" to tags)))
+        assertEquals(0, rows(equal.execute("s" to setOf(1, "x", ":k"))).size, "a string is no keyword")
+        val out = db.prepare("(query [:find ?t :where [:a :tags ?t]])")
+        assertEquals(listOf(listOf<Any?>(listOf("x", 1, ":k"))), rows(out.execute()))
+        val record = db.factLog(FactFilter(attributes = listOf(":tags"))).use { it.records(10).first() }
+        assertEquals(
+            MiniGrafValue.Set(listOf(MiniGrafValue.Text("x"), MiniGrafValue.Int64(1), MiniGrafValue.Keyword(":k"))),
+            record.value,
+        )
+    }
+
+    @Test
+    fun setElementForms() {
+        val db = db()
+        val a = UUID.fromString(entityA(db))
+        val pq = db.prepare("(query [:find ?x :where [\$e :n ?x] [(in? \$e \$s)]])")
+        assertEquals(listOf(listOf<Any?>(1)), rows(pq.execute("e" to a, "s" to setOf(a))), "a UUID element is a ref")
+        fun code(e: MiniGrafException.Api) = e.text.take(9)
+        assertEquals(
+            "[API-021]",
+            code(assertThrows<MiniGrafException.Api> { pq.execute("e" to a, "s" to setOf(setOf(1))) }),
+        )
+        assertThrows<IllegalArgumentException> { pq.execute("e" to a, "s" to setOf(MiniGrafBindValue.TxCount(1))) }
+        assertThrows<IllegalArgumentException> { pq.execute("e" to a, "s" to setOf(listOf(1))) }
+    }
 }
