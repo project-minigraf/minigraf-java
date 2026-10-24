@@ -127,6 +127,34 @@ A record's value is a `MiniGrafValue` (`Text`, `Int64`, `Float64`, `Bool`, `Ref`
 is the `validTo` of a fact valid forever. Errors are `MiniGrafException`;
 `Minigraf.errorMessage(e)` gives the text starting with its code, such as `[API-015]`.
 
+## Prepared queries
+
+`db.prepare(text)` parses a query once; run it with its `$slots` bound (names without
+the `$`). Each run reads the database as it is then, and a prepared query keeps its
+database open until both are closed.
+
+```java
+MiniGrafPreparedQuery pq = db.prepare("(query [:find ?n :where [?e :age $age] [?e :name ?n]])");
+String thirty = Minigraf.execute(pq, Map.of("age", 30));
+try (MiniGrafCursor cursor = Minigraf.query(pq, Map.of("age", 40))) { /* batches */ }
+```
+
+```kotlin
+val thirty = pq.execute("age" to 30)
+pq.query("age" to 40).use { cursor -> cursor.batches().forEach { /* rows */ } }
+```
+
+`Boolean`, `Byte`/`Short`/`Int`/`Long`, `Float`/`Double`, `String`, `null` and
+`java.util.UUID` (an entity, which also fits value slots as a ref) bind as they are.
+For the other kinds pass a `MiniGrafValue` (`Keyword`, `Ref`, a whole-number `Float64`),
+or `Minigraf.entity(uuid)`, `Minigraf.txCount(n)` / `Minigraf.timestamp(ms)` for
+`:as-of`, and `Minigraf.ANY_VALID_TIME` for `:valid-at`. Any other type throws
+`IllegalArgumentException`. A missing slot is `MiniGrafException.Api` with `[API-022]`,
+a slot in an attribute position `[API-023]`, and a value of the wrong kind `[API-024]`.
+
+Errors are `MiniGrafException.Parse`, `.Query`, `.Storage`, `.Api` (a bad argument, a
+closed object, a bind mistake) or `.Other`.
+
 ## Links
 
 - [Full Java/JVM integration guide](https://github.com/project-minigraf/minigraf/wiki/Use-Cases#java--jvm)

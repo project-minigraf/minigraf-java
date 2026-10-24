@@ -9,6 +9,8 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -72,5 +74,33 @@ class JavaInteropTest {
         }
         assertFalse(new File(abandoned).exists());
         assertFalse(new File(abandoned + ".partial").exists());
+    }
+
+    @Test
+    void preparedQueryFromJava() throws Exception {
+        MiniGrafDb db = Minigraf.openInMemory();
+        db.execute("(transact [[:a :n 1] [:b :n 2] [:a :s \"x\"]])");
+        MiniGrafPreparedQuery pq = db.prepare("(query [:find ?e :where [?e :n $n]])");
+        for (long n = 1; n <= 2; n++) {
+            String result = Minigraf.execute(pq, Map.of("n", n));
+            assertTrue(result.contains("\"results\":[["), result);
+        }
+        assertTrue(Minigraf.execute(pq, Map.of("n", 9)).contains("\"results\":[]"));
+
+        try (MiniGrafCursor cursor = Minigraf.query(pq, Map.of("n", 1))) {
+            int batches = 0;
+            for (String batch : Minigraf.batches(cursor, 10)) {
+                batches++;
+            }
+            assertEquals(1, batches);
+        }
+
+        MiniGrafPreparedQuery asOf = db.prepare("(query [:find ?x :as-of $t :where [?e :n ?x]])");
+        assertTrue(Minigraf.execute(asOf, Map.of("t", Minigraf.txCount(1))).contains("[1]"));
+
+        MiniGrafException e = assertThrows(MiniGrafException.class, () -> Minigraf.execute(pq, Map.of()));
+        assertTrue(e instanceof MiniGrafException.Api);
+        assertTrue(Minigraf.errorMessage(e).startsWith("[API-022]"));
+        assertThrows(IllegalArgumentException.class, () -> Minigraf.execute(pq, Map.of("n", new Object())));
     }
 }

@@ -1,5 +1,7 @@
 package io.github.project_minigraf.minigraf
 
+import java.util.UUID
+
 /**
  * Static entry points for Java callers.
  *
@@ -67,7 +69,71 @@ object Minigraf {
     /** The log's records, read [batchSize] at a time. */
     @JvmStatic
     fun records(log: MiniGrafFactLog, batchSize: Int): Iterable<FactRecord> = log.records(batchSize)
+
+    /**
+     * Runs [prepared] with [bindings] (slot names without the `$`) and returns its
+     * result as JSON. Plain values bind as they are; see [bindValue].
+     */
+    @JvmStatic
+    @Throws(MiniGrafException::class)
+    fun execute(prepared: MiniGrafPreparedQuery, bindings: Map<String, Any?>): String =
+        prepared.execute(bindValues(bindings))
+
+    /** Runs [prepared] with [bindings], as [execute] does, and returns a cursor. */
+    @JvmStatic
+    @Throws(MiniGrafException::class)
+    fun query(prepared: MiniGrafPreparedQuery, bindings: Map<String, Any?>): MiniGrafCursor =
+        prepared.query(bindValues(bindings))
+
+    /** Binds an entity slot (it also fits a value slot as a ref). */
+    @JvmStatic
+    fun entity(uuid: UUID): MiniGrafBindValue = MiniGrafBindValue.Entity(uuid.toString())
+
+    /** Binds `:as-of $slot` to the transaction counter [n]. */
+    @JvmStatic
+    fun txCount(n: Long): MiniGrafBindValue = MiniGrafBindValue.TxCount(n)
+
+    /** Binds `:as-of $slot` or `:valid-at $slot` to Unix milliseconds. */
+    @JvmStatic
+    fun timestamp(ms: Long): MiniGrafBindValue = MiniGrafBindValue.Timestamp(ms)
+
+    /** Binds `:valid-at $slot` to every valid time, like `:any-valid-time`. */
+    @JvmField
+    val ANY_VALID_TIME: MiniGrafBindValue = MiniGrafBindValue.AnyValidTime
 }
+
+/**
+ * [v] as a bind value. `Boolean`; `Byte`, `Short`, `Int` and `Long` as integers;
+ * `Float` and `Double` as floats; `String`; `null`; and `java.util.UUID` (an
+ * entity, which also fits value and rule-argument slots) bind as they are, as do
+ * a [MiniGrafValue] and a [MiniGrafBindValue]. Any other type is
+ * [IllegalArgumentException].
+ */
+fun bindValue(name: String, v: Any?): MiniGrafBindValue = when (v) {
+    null -> MiniGrafBindValue.Value(MiniGrafValue.Null)
+    is MiniGrafBindValue -> v
+    is MiniGrafValue -> MiniGrafBindValue.Value(v)
+    is Boolean -> MiniGrafBindValue.Value(MiniGrafValue.Bool(v))
+    is Byte, is Short, is Int, is Long -> MiniGrafBindValue.Value(MiniGrafValue.Int64((v as Number).toLong()))
+    is Float, is Double -> MiniGrafBindValue.Value(MiniGrafValue.Float64((v as Number).toDouble()))
+    is String -> MiniGrafBindValue.Value(MiniGrafValue.Text(v))
+    is UUID -> MiniGrafBindValue.Entity(v.toString())
+    else -> throw IllegalArgumentException(
+        "slot \$$name: cannot bind a ${v::class.java.name}; use Boolean, an integer or " +
+            "floating type, String, null, UUID, a MiniGrafValue or a MiniGrafBindValue",
+    )
+}
+
+private fun bindValues(bindings: Map<String, Any?>): Map<String, MiniGrafBindValue> =
+    bindings.mapValues { (name, v) -> bindValue(name, v) }
+
+/** Runs the query with [bindings] (`"slot" to value`, no `$`) and returns its JSON. */
+fun MiniGrafPreparedQuery.execute(vararg bindings: Pair<String, Any?>): String =
+    execute(bindValues(bindings.toMap()))
+
+/** Runs the query with [bindings] and returns a cursor over its rows. */
+fun MiniGrafPreparedQuery.query(vararg bindings: Pair<String, Any?>): MiniGrafCursor =
+    query(bindValues(bindings.toMap()))
 
 /** Builds [OpenOptions] fluently, for Java. */
 class OpenOptionsBuilder internal constructor() {
@@ -126,4 +192,5 @@ val MiniGrafException.text: String
         is MiniGrafException.Query -> msg
         is MiniGrafException.Parse -> msg
         is MiniGrafException.Other -> msg
+        is MiniGrafException.Api -> msg
     }
