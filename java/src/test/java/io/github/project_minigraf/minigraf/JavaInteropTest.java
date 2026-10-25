@@ -103,4 +103,38 @@ class JavaInteropTest {
         assertTrue(Minigraf.errorMessage(e).startsWith("[API-022]"));
         assertThrows(IllegalArgumentException.class, () -> Minigraf.execute(pq, Map.of("n", new Object())));
     }
+
+    @Test
+    void userFunctionsFromJava() throws Exception {
+        MiniGrafDb db = Minigraf.openInMemory();
+        db.execute("(transact [[:a :n 1] [:b :n 2] [:c :n 3]])");
+        db.registerPredicate("odd?", v -> ((MiniGrafValue.Int64) v).getValue() % 2 == 1);
+        assertTrue(db.execute("(query [:find ?n :where [?e :n ?n] [(odd? ?n)] [(> ?n 1)]])")
+                .contains("\"results\":[[3]]"));
+
+        db.registerAggregate("product", () -> new MiniGrafAccumulator() {
+            private long product = 1;
+
+            @Override
+            public void step(MiniGrafValue v) {
+                product *= ((MiniGrafValue.Int64) v).getValue();
+            }
+
+            @Override
+            public MiniGrafValue finish(long count) {
+                return new MiniGrafValue.Int64(product);
+            }
+        });
+        assertTrue(db.execute("(query [:find (product ?n) :where [?e :n ?n]])").contains("\"results\":[[6]]"));
+
+        // The interfaces declare no checked exception, so Java throws an unchecked one.
+        db.registerPredicate("broken?", v -> {
+            throw new IllegalArgumentException("from Java");
+        });
+        MiniGrafException e = assertThrows(MiniGrafException.class,
+                () -> db.execute("(query [:find ?n :where [?e :n ?n] [(broken? ?n)]])"));
+        assertTrue(e instanceof MiniGrafException.Query);
+        assertEquals("[QRY-014] user function `broken?` failed: java.lang.IllegalArgumentException: from Java",
+                Minigraf.errorMessage(e));
+    }
 }
