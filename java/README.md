@@ -219,7 +219,7 @@ db.registerAggregate("product", () -> new MiniGrafAccumulator() {
   the database and every cursor and prepared query opened from it are closed. There is
   no unregister. Predicates and aggregates have separate names, and registering a name
   twice in either is an error (`INT-040`). A query sees the functions registered when it
-  opened.
+  opened; a prepared query, those registered when each run starts.
 - **Threading.** A callback runs on the thread that calls `execute` (of the database or
   a prepared query) or a cursor's `nextBatch`, including a prepared query's cursor.
   Queries on different threads may call the same object at once, so it must be

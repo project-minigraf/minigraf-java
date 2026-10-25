@@ -152,6 +152,15 @@ class UdfTest {
     }
 
     @Test
+    fun aPreparedQuerySeesFunctionsRegisteredBeforeEachRun() {
+        val db = db()
+        val pq = db.prepare("(query [:find ?n :where [?e :n ?n] [(even? ?n)]])")
+        assertThrows<MiniGrafException> { pq.execute() }
+        db.registerPredicate("even?", IsEven)
+        assertEquals(listOf(listOf<Any?>(2), listOf<Any?>(4)), rows(pq.execute()))
+    }
+
+    @Test
     fun userFunctionFailureInACursorIsQry014() {
         val db = db()
         db.registerAggregate("total", Total(failOn = 2))
