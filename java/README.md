@@ -13,7 +13,7 @@ Minigraf for Java and Kotlin on the desktop JVM. Fat JAR with embedded native li
 
 ```kotlin
 dependencies {
-    implementation("io.github.project-minigraf:minigraf-jvm:2.0.10")
+    implementation("io.github.project-minigraf:minigraf-jvm:2.0.11")
 }
 ```
 
@@ -23,7 +23,7 @@ dependencies {
 <dependency>
     <groupId>io.github.project-minigraf</groupId>
     <artifactId>minigraf-jvm</artifactId>
-    <version>2.0.10</version>
+    <version>2.0.11</version>
 </dependency>
 ```
 
