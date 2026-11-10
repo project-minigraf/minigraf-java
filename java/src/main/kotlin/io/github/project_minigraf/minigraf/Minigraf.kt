@@ -19,6 +19,13 @@ object Minigraf {
      */
     const val WAL_CHECKPOINT_NEVER: Long = Long.MAX_VALUE
 
+    /**
+     * The override list that applies when [OpenOptionsBuilder.allowOverrides] is not
+     * called: the Rust `Overridable::DEFAULTS`, read from the core library.
+     */
+    @JvmField
+    val OVERRIDABLE_DEFAULTS: List<Overridable> = overridableDefaults()
+
     /** Opens (or creates) a file-backed database at [path]. */
     @JvmStatic
     @Throws(MiniGrafException::class)
@@ -164,6 +171,22 @@ class OpenOptionsBuilder internal constructor() {
      * QRY-012. `Long.MAX_VALUE` means no limit, the default.
      */
     fun queryMemoryLimit(bytes: Long) = apply { options = options.copy(queryMemoryLimit = bytes) }
+    /**
+     * The query keywords query text may use to override these settings. It replaces
+     * [Minigraf.OVERRIDABLE_DEFAULTS]; with no arguments it refuses them all (API-025).
+     * Not calling it keeps the defaults.
+     */
+    fun allowOverrides(vararg keywords: Overridable) = allowOverrides(keywords.asList())
+    /** [allowOverrides] from a collection, such as [Minigraf.OVERRIDABLE_DEFAULTS]. */
+    fun allowOverrides(keywords: Collection<Overridable>) =
+        apply { options = options.copy(allowOverrides = keywords.toList()) }
+    /** Facts a transaction stages before a file database writes them in chunks. */
+    fun transactionChunkFacts(n: Long) = apply { options = options.copy(transactionChunkFacts = n) }
+    /**
+     * Rounds one stratum of a rule query may run; more fail with INT-020.
+     * `Long.MAX_VALUE` means no limit.
+     */
+    fun maxIterations(n: Long) = apply { options = options.copy(maxIterations = n) }
     fun build(): OpenOptions = options
 }
 

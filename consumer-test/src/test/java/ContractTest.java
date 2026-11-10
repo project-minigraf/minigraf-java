@@ -1,5 +1,6 @@
 // The consumer contract every binding checks (spec §4), from Java: in memory,
 // file-backed across a reopen, and the error type for invalid Datalog.
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,8 +10,10 @@ import io.github.project_minigraf.minigraf.MiniGrafException;
 import io.github.project_minigraf.minigraf.MiniGrafPreparedQuery;
 import io.github.project_minigraf.minigraf.MiniGrafValue;
 import io.github.project_minigraf.minigraf.Minigraf;
+import io.github.project_minigraf.minigraf.Overridable;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -99,6 +102,35 @@ class ContractTest {
                     () -> db.execute("(query [:find (product ?a) :where [?e :age ?a]])"));
             String msg = Minigraf.errorMessage(e);
             assertTrue(msg.startsWith("[QRY-014]") && msg.contains("zero"), "a throwing UDF is QRY-014");
+        }
+    }
+
+    // minigraf#872: the override list, the new open options and a prepared setter.
+    @Test
+    void overridesOptionsAndSetters() throws Exception {
+        assertEquals(
+                List.of(Overridable.MAX_DERIVED_FACTS, Overridable.MAX_RESULTS, Overridable.MAX_ITERATIONS),
+                Minigraf.OVERRIDABLE_DEFAULTS,
+                "the default override list comes from core");
+        Path dir = Files.createTempDirectory("minigraf-overrides");
+        String path = dir.resolve("o.graph").toString();
+        try (MiniGrafDb db = Minigraf.openWithOptions(path, Minigraf.options()
+                .allowOverrides()
+                .transactionChunkFacts(2)
+                .maxIterations(1000)
+                .build())) {
+            db.execute("(transact [[:a :edge :b] [:b :edge :c] [:c :edge :d]])");
+            db.execute("(rule [(reach ?x ?y) [?x :edge ?y]])");
+            db.execute("(rule [(reach ?x ?y) [?x :edge ?z] (reach ?z ?y)])");
+            MiniGrafException refused = assertThrows(MiniGrafException.Api.class,
+                    () -> db.execute("(query [:find ?x ?y :where (reach ?x ?y) :max-derived-facts 10])"));
+            assertTrue(Minigraf.errorMessage(refused).startsWith("[API-025]"), "an empty list refuses the keyword");
+            MiniGrafPreparedQuery pq = db.prepare("(query [:find ?x ?y :where (reach ?x ?y)])");
+            MiniGrafPreparedQuery derived = pq.withMaxIterations(1);
+            MiniGrafException limited = assertThrows(MiniGrafException.class,
+                    () -> Minigraf.execute(derived, Map.of()));
+            assertTrue(Minigraf.errorMessage(limited).startsWith("[INT-020]"), "the derived query has its own limit");
+            assertTrue(Minigraf.execute(pq, Map.of()).contains("\"results\":[["), "the receiver is unchanged");
         }
     }
 
