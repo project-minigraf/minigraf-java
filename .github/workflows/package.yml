@@ -58,7 +58,7 @@ jobs:
             zig-target: aarch64-unknown-linux-musl
             native-dir: linux-musl/aarch64
             lib-name: libminigraf_ffi.so
-          - os: macos-14
+          - os: macos-15
             target: universal2
             native-dir: macos/universal
             lib-name: libminigraf_ffi.dylib
