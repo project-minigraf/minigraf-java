@@ -115,6 +115,28 @@ distinct sets, aggregate groups, window rows, rule-derived facts). A query that 
 hold more fails with QRY-012 and frees what it held. The default, and `Long.MAX_VALUE`,
 is no limit. Rows a cursor returns are not counted, so read a large answer with `query()`.
 
+Query text may override some settings with keywords such as `:max-derived-facts 1000`.
+`allowOverrides(...)` lists the `Overridable` keywords it may use (`MAX_DERIVED_FACTS`,
+`MAX_RESULTS`, `QUERY_MEMORY_LIMIT`, `MAX_ITERATIONS`). Not calling it keeps the defaults,
+`Minigraf.OVERRIDABLE_DEFAULTS`, read from the core library (today `MAX_DERIVED_FACTS`,
+`MAX_RESULTS` and `MAX_ITERATIONS`). A list replaces the defaults, it does not add to them,
+and `allowOverrides()` with no arguments refuses every keyword: a query that uses one
+throws `MiniGrafException.Api` with `[API-025]` from `execute`, `query` and `prepare`.
+
+```java
+List<Overridable> allowed = new ArrayList<>(Minigraf.OVERRIDABLE_DEFAULTS);
+allowed.add(Overridable.QUERY_MEMORY_LIMIT);   // the defaults plus :query-memory-limit
+MiniGrafDb db = Minigraf.openWithOptions("app.graph", Minigraf.options()
+        .allowOverrides(allowed)
+        .maxIterations(10_000)            // rounds per stratum of a rule query, else INT-020
+        .transactionChunkFacts(16_384)    // facts staged before a large transaction is chunked
+        .build());
+```
+
+`maxIterations` defaults to 1,000,000 and `Long.MAX_VALUE` is no limit;
+`transactionChunkFacts` defaults to 65,536 and is clamped to 1..=1,000,000. A negative
+count is `[API-017]`.
+
 Kotlin callers can use `cursor.batches()` and `log.records()` directly, and the
 generated constructors with named arguments (`OpenOptions(readOnly = true)`).
 
@@ -161,6 +183,19 @@ values come back as JSON arrays from `execute` and as `MiniGrafValue.Set` in fac
 
 Errors are `MiniGrafException.Parse`, `.Query`, `.Storage`, `.Api` (a bad argument, a
 closed object, a bind mistake) or `.Other`.
+
+`withMaxDerivedFacts(n)`, `withQueryMemoryLimit(bytes)` and `withMaxIterations(n)` each
+return a new prepared query with that limit; the one they are called on is unchanged.
+They are application code, so `allowOverrides` does not apply to them, and an allowed
+keyword in the query text still overrides them. `Long.MAX_VALUE` means no limit and a
+negative value is `[API-017]`. A derived query keeps its database open, as any prepared
+query does.
+
+```java
+MiniGrafPreparedQuery reach = db.prepare("(query [:find ?x ?y :where (reach ?x ?y)])");
+MiniGrafPreparedQuery small = reach.withMaxDerivedFacts(10_000).withQueryMemoryLimit(16 << 20);
+Minigraf.execute(small, Map.of());   // INT-020 or QRY-012 past a limit; reach is unchanged
+```
 
 ## User functions
 
