@@ -54,6 +54,13 @@ object Minigraf {
     fun filter(): FactFilterBuilder = FactFilterBuilder()
 
     /**
+     * A builder for [TxOptions] (minigraf#824); an option left unset is the
+     * database's. `db.beginWriteWith(Minigraf.txOptions().chunkFacts(10_000).build())`.
+     */
+    @JvmStatic
+    fun txOptions(): TxOptionsBuilder = TxOptionsBuilder()
+
+    /**
      * Starts building a new database at [path] from fact records. Use it in
      * try-with-resources: `close()` abandons the build unless `finish()` ran.
      */
@@ -189,6 +196,34 @@ class OpenOptionsBuilder internal constructor() {
     fun maxIterations(n: Long) = apply { options = options.copy(maxIterations = n) }
     fun build(): OpenOptions = options
 }
+
+/** Builds [TxOptions] fluently, for Java (minigraf#824). */
+class TxOptionsBuilder internal constructor() {
+    private var options = TxOptions()
+
+    /** This transaction's WAL sync at commit. Unset: the database's `synchronous`. */
+    fun synchronous(mode: SyncMode) = apply { options = options.copy(synchronous = mode) }
+    /**
+     * Facts this transaction stages before a file database writes it in chunks.
+     * Unset: the database's `transactionChunkFacts`. Negative is API-017.
+     */
+    fun chunkFacts(n: Long) = apply { options = options.copy(chunkFacts = n) }
+    fun build(): TxOptions = options
+}
+
+/**
+ * Begins a write transaction with [options] (minigraf#824); see [MiniGrafDb.beginWrite].
+ * Use it with `use { }`, which rolls back on exit unless it was committed:
+ *
+ * ```kotlin
+ * db.beginWrite(TxOptions(chunkFacts = 10_000)).use { tx ->
+ *     tx.execute("(transact [[:alice :balance 90]])")
+ *     tx.commit()
+ * }
+ * ```
+ */
+@Throws(MiniGrafException::class)
+fun MiniGrafDb.beginWrite(options: TxOptions): MiniGrafWriteTransaction = beginWriteWith(options)
 
 /** Builds a [FactFilter] fluently, for Java. */
 class FactFilterBuilder internal constructor() {

@@ -1,6 +1,7 @@
 // The consumer contract every binding checks (spec §4), from Java: in memory,
 // file-backed across a reopen, and the error type for invalid Datalog.
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +10,7 @@ import io.github.project_minigraf.minigraf.MiniGrafDb;
 import io.github.project_minigraf.minigraf.MiniGrafException;
 import io.github.project_minigraf.minigraf.MiniGrafPreparedQuery;
 import io.github.project_minigraf.minigraf.MiniGrafValue;
+import io.github.project_minigraf.minigraf.MiniGrafWriteTransaction;
 import io.github.project_minigraf.minigraf.Minigraf;
 import io.github.project_minigraf.minigraf.Overridable;
 import java.nio.file.Files;
@@ -131,6 +133,37 @@ class ContractTest {
                     () -> Minigraf.execute(derived, Map.of()));
             assertTrue(Minigraf.errorMessage(limited).startsWith("[INT-020]"), "the derived query has its own limit");
             assertTrue(Minigraf.execute(pq, Map.of()).contains("\"results\":[["), "the receiver is unchanged");
+        }
+    }
+
+    // minigraf#824: write transactions through the published package.
+    @Test
+    void writeTransactions() throws Exception {
+        Path dir = Files.createTempDirectory("minigraf-tx");
+        String path = dir.resolve("tx.graph").toString();
+        try (MiniGrafDb db = Minigraf.open(path)) {
+            db.execute("(transact [[:alice :name \"Alice\"]])");
+            try (MiniGrafWriteTransaction tx = db.beginWriteWith(Minigraf.txOptions().chunkFacts(1000).build())) {
+                tx.execute("(transact [[:bob :name \"Bob\"]])");
+                assertTrue(tx.execute("(query [:find ?n :where [?e :name ?n]])").contains("Bob"),
+                        "the transaction reads its own write");
+                tx.commit();
+                MiniGrafException finished = assertThrows(MiniGrafException.Api.class,
+                        () -> tx.execute("(query [:find ?n :where [?e :name ?n]])"));
+                assertTrue(Minigraf.errorMessage(finished).startsWith("[API-018]"), "a finished transaction");
+            }
+            assertThrows(IllegalStateException.class, () -> {
+                try (MiniGrafWriteTransaction tx = db.beginWrite()) {
+                    tx.execute("(transact [[:carol :name \"Carol\"]])");
+                    throw new IllegalStateException("leave the block");
+                }
+            });
+            assertFalse(db.execute("(query [:find ?n :where [?e :name ?n]])").contains("Carol"),
+                    "an exception rolls back");
+        }
+        try (MiniGrafDb db = Minigraf.open(path)) {
+            assertTrue(db.execute("(query [:find ?n :where [?e :name ?n]])").contains("Bob"),
+                    "the commit survives reopen");
         }
     }
 
