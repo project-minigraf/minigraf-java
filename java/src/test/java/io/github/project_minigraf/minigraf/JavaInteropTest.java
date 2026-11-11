@@ -137,4 +137,21 @@ class JavaInteropTest {
         assertEquals("[QRY-014] user function `broken?` failed: java.lang.IllegalArgumentException: from Java",
                 Minigraf.errorMessage(e));
     }
+
+    @Test
+    void writeTransactionFromJava() throws Exception {
+        MiniGrafDb db = Minigraf.openInMemory();
+        db.execute("(transact [[:alice :name \"Alice\"]])");
+        try (MiniGrafWriteTransaction tx = db.beginWriteWith(Minigraf.txOptions().chunkFacts(1000).build())) {
+            tx.execute("(transact [[:bob :name \"Bob\"]])");
+            assertTrue(tx.execute("(query [:find ?n :where [?e :name ?n]])").contains("Bob"));
+            tx.commit();
+        }
+        try (MiniGrafWriteTransaction tx = db.beginWrite()) {
+            tx.execute("(transact [[:carol :name \"Carol\"]])");
+        }
+        String all = db.execute("(query [:find ?n :where [?e :name ?n]])");
+        assertTrue(all.contains("Bob"), all);
+        assertFalse(all.contains("Carol"), "try-with-resources rolls back unless committed");
+    }
 }

@@ -264,6 +264,59 @@ db.registerAggregate("product", () -> new MiniGrafAccumulator() {
   function. Inside a write transaction, the calls the core refuses there still return
   `INT-001`.
 
+## Write transactions
+
+A write transaction stages several `transact`, `retract` and `query` statements, with
+queries seeing what it staged, and then commits them as one transaction or rolls them
+back (minigraf#824). First in the release built on core v3.0.0 (core commit
+`CORE_COMMIT`).
+
+```kotlin
+val db = MiniGrafDb.open("bank.graph")
+db.execute("(transact [[:alice :balance 100] [:bob :balance 50]])")
+
+// use { } closes the transaction on exit, which rolls it back unless it was
+// committed, also when an exception leaves the block.
+db.beginWrite(TxOptions(chunkFacts = 10_000)).use { tx ->
+    tx.execute("(transact [[:alice :balance 70] [:bob :balance 80]])")
+    tx.execute("(retract [[:alice :balance 100] [:bob :balance 50]])")
+    val staged = tx.execute("(query [:find ?b :where [:alice :balance ?b]])")
+    if (!staged.contains("-")) tx.commit()
+}
+```
+
+From Java, `beginWriteWith` takes the options from a builder, and try-with-resources
+rolls back unless committed:
+
+```java
+try (MiniGrafWriteTransaction tx = db.beginWriteWith(Minigraf.txOptions().chunkFacts(10_000).build())) {
+    tx.execute("(transact [[:alice :balance 70]])");
+    tx.commit();
+}
+```
+
+- `db.beginWrite()` uses the database's options; `db.beginWrite(options)` (Kotlin) or `db.beginWriteWith(options)` (Java, with `Minigraf.txOptions()`) takes `TxOptions`. An option left
+  `null` is the database's: `synchronous` (`SyncMode.FULL` / `NORMAL`) is this commit's
+  WAL sync, `chunkFacts` the facts staged before a file database writes the transaction
+  in chunks (negative is API-017). Read-only databases throw API-014.
+- `tx.execute(datalog)` returns what `db.execute` returns; a staged write returns
+  `{"ok":true}`. A statement that fails stages nothing and leaves the transaction open.
+  There are no cursors or prepared queries inside a transaction.
+- `tx.commit()` applies everything as one transaction; a commit that fails rolls back.
+  `tx.rollback()` discards it. Either way it is finished: `execute` and `commit` then
+  throw API-018, and `rollback` does nothing.
+- Commit is always explicit. `close()` (and `use { }`, try-with-resources) frees the transaction
+  and rolls it back unless it committed; after `close()` the object cannot be used. The
+  garbage collector may never free an abandoned one, so do not rely on it.
+- An open transaction holds the database's write lock until it finishes, so end every
+  transaction explicitly or through `use { }` or try-with-resources. On the thread that began it, database
+  calls (`execute`, `query`, `prepare`, `factLog`, `checkpoint`, another `beginWrite`, prepared queries) fail with INT-001, and so do user functions its statements run. On
+  other threads, writes and begins wait until it ends; queries read the committed
+  state. Use a transaction on the thread that began it: a thread that uses one it did
+  not begin and then writes through the database waits on that transaction.
+- Rules registered inside a transaction stay registered after a rollback.
+- The transaction keeps its database open until it is closed.
+
 ## Links
 
 - [Full Java/JVM integration guide](https://github.com/project-minigraf/minigraf/wiki/Use-Cases#java--jvm)
