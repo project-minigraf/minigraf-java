@@ -128,4 +128,39 @@ class TransactionTest {
         assertEquals("API-014", code(assertThrows<MiniGrafException> { ro.beginWrite() }))
         ro.close()
     }
+
+    /** minigraf#886: such a call waited on the transaction forever. */
+    @Test
+    fun userFunctionCallingItsOwnTransactionGetsInt001() {
+        val db = memDb()
+        val tx = db.beginWrite()
+        val seen = mutableListOf<String>()
+        db.registerPredicate(
+            "calls-tx?",
+            object : MiniGrafPredicate {
+                override fun test(value: MiniGrafValue): Boolean {
+                    val calls: List<() -> Unit> = listOf({ tx.execute(names) }, { tx.commit() }, { tx.rollback() })
+                    for (call in calls) {
+                        seen += try {
+                            call()
+                            "no error"
+                        } catch (e: MiniGrafException) {
+                            code(e)
+                        }
+                    }
+                    seen += tx.isOpen().toString()
+                    return true
+                }
+            },
+        )
+        val rows = tx.execute("(query [:find ?n :where [?e :person/name ?n] [(calls-tx? ?n)]])")
+        assertEquals(listOf("Alice", "Bob"), namesOf(rows))
+        val perRow = listOf("INT-001", "INT-001", "INT-001", "true")
+        assertEquals(perRow + perRow, seen)
+        // The refused commit and rollback left it open.
+        assertEquals(true, tx.isOpen())
+        tx.execute("(transact [[:carol :person/name \"Carol\"]])")
+        tx.commit()
+        assertEquals(listOf("Alice", "Bob", "Carol"), namesOf(db.execute(names)))
+    }
 }
