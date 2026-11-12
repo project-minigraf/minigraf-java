@@ -310,7 +310,7 @@ try (MiniGrafWriteTransaction tx = db.beginWriteWith(Minigraf.txOptions().chunkF
   garbage collector may never free an abandoned one, so do not rely on it.
 - An open transaction holds the database's write lock until it finishes, so end every
   transaction explicitly or through `use { }` or try-with-resources. On the thread that began it, database
-  calls (`execute`, `query`, `prepare`, `factLog`, `checkpoint`, another `beginWrite`, prepared queries) fail with INT-001, and so do user functions its statements run. On
+  calls (`execute`, `query`, `prepare`, `factLog`, `checkpoint`, another `beginWrite`, prepared queries) fail with INT-001, and so do user functions its statements run. A user function that calls the transaction it runs in (`execute`, `commit`, `rollback`) gets INT-001 too. On
   other threads, writes and begins wait until it ends; queries read the committed
   state. Use a transaction on the thread that began it: a thread that uses one it did
   not begin and then writes through the database waits on that transaction.
