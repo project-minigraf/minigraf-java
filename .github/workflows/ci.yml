@@ -53,6 +53,13 @@ jobs:
         working-directory: java
         run: ./gradlew test
 
+      - name: Benchmark oracle and nightly adapter tests
+        if: hashFiles('bench/nightly.sh') != ''
+        run: |
+          bash java/gradlew -p java jar
+          bash java/gradlew -p bench/manual test
+          python3 -I -m unittest discover -s bench/tests -v
+
   # Runs the Java tests on musl libc, so NativeLoader's musl detection and the
   # linux-musl native are exercised at runtime rather than only built.
   java-test-alpine:
